@@ -1,0 +1,16 @@
+# Secrets / local config
+.env
+*.cookie
+cookies*.txt
+
+# Internal / site-specific artifacts (not for the shared repo)
+metadata/
+RESEARCH_AND_DESIGN.md
+create_r7_batch.py
+captures/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/

@@ -1,0 +1,5 @@
+# Runtime (MCP server): mcp + httpx
+mcp>=1.27
+httpx>=0.28
+# Cookie refresh only (browser SSO): Playwright (uses installed Edge via channel="msedge")
+playwright>=1.61

@@ -1,0 +1,103 @@
+# solman-fb-mcp — SAP SolMan Focused Build Requirements MCP server
+
+An MCP server that lets an AI assistant (Claude, etc.) **create and manage Solution
+Manager Focused Build Requirements** — and navigate the Solution Documentation
+process hierarchy — directly over the SAP OData API, instead of driving the Fiori
+UI through browser automation.
+
+Point it at your own SolMan Focused Build system via `.env`. It is **cookie-only at
+runtime** (never opens a browser); an out-of-band refresh script mints the session
+cookie via browser SSO.
+
+## Setup
+
+```bash
+pip install -r requirements.txt          # mcp + httpx (+ playwright for refresh)
+python -m playwright install msedge      # or use an installed Edge/Chromium
+cp .env.example .env                      # then fill in your system (see below)
+```
+
+Fill `.env` with your host and the site-specific ids. Discover the ids with the
+tools once connected: `list_lookup('solutions')`, `list_branches(<solutionId>)`,
+`list_lookup('projects'|'categories'|'priorities')`, and the `soldoc_*` tools.
+
+Register the server with your MCP client (stdio), e.g.:
+
+```json
+{ "mcpServers": { "solman-fb": {
+    "type": "stdio",
+    "command": "python",
+    "args": ["/path/to/solman-fb-mcp/server.py"]
+} } }
+```
+
+## Auth model (browser SSO → cookie file → cookie-only server)
+
+Many SolMan systems front HTTPS logon with SAML 2.0 → SAP Cloud Identity (IAS) or
+Windows SPNego. Rather than script that, a real browser establishes the session
+once and the cookie is reused:
+
+1. **Refresh (out-of-band, occasional):**
+   ```powershell
+   ./pm1-refresh.ps1          # opens Edge, completes SSO, saves the cookie
+   # or: python pm1_refresh.py --timeout 300
+   ```
+   Writes the SAP session cookie to `%USERPROFILE%\.vsp\cookies-pm1.txt` (never
+   committed). First run may need an interactive login; later runs are silent
+   (persistent Edge profile).
+2. **Server (runtime):** loads the cookie, handles the CSRF token, never opens a
+   browser. If the session expires, tools return `SESSION EXPIRED: … run pm1_refresh.py`.
+
+> Note: SolMan's ADT node is usually closed on a Focused Build box, so ADT-based
+> tools (e.g. `vsp.exe`) can't be reused for cookie capture — hence the dedicated
+> refresh script that lands on an allowed OData path.
+
+## Tools
+
+| Tool | Purpose |
+|------|---------|
+| `search_requirements(query, top)` | Find requirements by title substring |
+| `get_requirement(guid)` | Read a requirement in full |
+| `create_requirement(title, priority, classification, …)` | Create a requirement. Title truncated to 40; `external_reference` → the ZZFLD00000B custom field. Optional `element_id` attaches a Solution element. |
+| `update_requirement(guid, …)` | MERGE-update editable fields |
+| `list_requirement_actions(guid)` | List available lifecycle actions |
+| `withdraw_requirement(guid)` | Withdraw/cancel (PPF action) |
+| `submit_requirement_for_approval(guid)` | Send for approval |
+| `execute_requirement_action(guid, action_id)` | Run any lifecycle action |
+| `search_solution_elements(query, branch_id)` | Flat search of SolDoc elements by name |
+| `attach_element(requirement_guid, element_id, …)` | Attach a SolDoc element to a requirement |
+| `list_lookup(kind)` | Reference values: solutions/priorities/classifications/categories/statuses/projects |
+| `list_branches(solution_id)` | Branches for a solution |
+| `soldoc_context(branch_id)` | SolDoc root context (solution/branch names) |
+| `soldoc_list_scopes(branch_id)` | Scopes/views for a branch (Show All, team/release scopes) |
+| `soldoc_browse(parent_element_id, branch_id, scope)` | Navigate the process-structure tree — empty parent = roots, else children. Drill via `element_id` where `has_children`. |
+| `soldoc_get_element(element_id, branch_id)` | Resolve one element (type + full path) by id |
+
+## Files
+
+- `config.py` — env-driven configuration (loads `.env`)
+- `pm1_refresh.py` / `pm1-refresh.ps1` — Playwright SSO cookie minting
+- `client.py` — cookie-only httpx client (CSRF, get/create/merge/function)
+- `requirements.py` — requirement domain operations
+- `soldoc.py` — Solution Documentation tree navigation (`soldoc_node_selection_srv`)
+- `server.py` — FastMCP stdio server
+- `test_mcp.py` — read-only MCP stdio smoke test
+
+## Notes / gotchas (verified against a live SolMan 7.2 Focused Build system)
+
+- Requirement transaction type is configurable (`SOLMAN_REQ_PROCESS_TYPE`, e.g. `S1BR`).
+  Primary service = `BUSINESS_REQUIREMENTS_SRV`; `CRM_GENERIC_SRV` is used for the
+  requirement search list + some lookups.
+- **SolDoc hierarchy** = dedicated `soldoc_node_selection_srv` (real parent/child tree, not the
+  capped flat `ELEMENTSet`). Root seed `CrmObjectSet(CrmId='',BranchId=<b>)`; nodes via
+  `/elementsTree?$filter=ScopeId eq '<scope>'` (+`and ParentElementId eq '<id>'` for children).
+  **`ScopeId` is mandatory** on the tree filter. Node `ElementId` is the id `attach_element` consumes.
+- **Create needs Category + Owner** — omitting them returns HTTP 201 with an empty
+  entity that silently does not persist.
+- **No DELETE / no status field-write.** Lifecycle changes are **PPF actions**
+  (`get_ppf_actions?ActionId='…'&WsGuid='…'`), not MERGE of `StatusId`.
+- **Attach element** uses the `Assign_Requirement` function import — `POST REQELEMENTSet` is a
+  **silent no-op**. Attach the **reference** node (`/Business Processes/…`), not the library original
+  (`/Libraries/…`). A step can be referenced into multiple parents — pick the right one.
+- `$format=json` is rejected on write requests (use the `Accept` header).
+- The WORKSPACE `Guid` (dashed) ↔ `RequirementGuid` (no dashes, upper) — handled internally.
