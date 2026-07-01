@@ -26,6 +26,24 @@ def _guid_from_url(url: str) -> str:
     return m.group(1).replace("-", "").upper() if m else ""
 
 
+def _redash(guid: str) -> str:
+    """32-char plain GUID -> dashed form for a WORKSPACESET key."""
+    g = guid.replace("-", "").upper()
+    return f"{g[:8]}-{g[8:12]}-{g[12:16]}-{g[16:20]}-{g[20:32]}"
+
+
+def link_verified(wp_guid: str, requirement_guid: str) -> bool:
+    """True iff the WP's related transactions include the requirement.
+
+    Reads CRM_GENERIC_SRV WORKSPACESET(<wp>,'S1IT')/BT_RELATEDTRANSSet — the WP's linked
+    requirement appears there as a row with WsType='Requirement'.
+    """
+    key = f"WORKSPACESET(Guid=guid'{_redash(wp_guid)}',ProcessType='{WP_PROCESS_TYPE}')/BT_RELATEDTRANSSet"
+    want = _dash(requirement_guid)
+    with SolmanClient(service=config.SVC_GENERIC) as c:
+        return any(_dash(r.get("WsTransGuid", "")) == want for r in c.results(key))
+
+
 def create_work_package(
     requirement_guid: str,
     title: str,
@@ -90,7 +108,7 @@ def create_work_package(
                   "title": title[:MAX_TITLE], "requirement_guid": req_guid, "assigned": False}
         if assign and wp_guid:
             c.function("Assign_Existing_Wp", {"WpGuid": wp_guid, "RequirementGuid": req_guid})
-            result["assigned"] = True
+            result["assigned"] = link_verified(wp_guid, req_guid)  # self-verify the link persisted
     return result
 
 
@@ -105,4 +123,15 @@ def assign_work_package(requirement_guid: str, work_package_guid: str) -> dict:
                 f"Requirement is '{status}', must be 'Approved' to assign a WP. Approve it first."
             )
         c.function("Assign_Existing_Wp", {"WpGuid": wp_guid, "RequirementGuid": req_guid})
+    assigned = link_verified(wp_guid, req_guid)
+    if not assigned:
+        raise SolmanError(f"Assign call returned but WP {wp_guid} is not linked to {req_guid} (verify failed).")
     return {"requirement_guid": req_guid, "work_package_guid": wp_guid, "assigned": True}
+
+
+def withdraw_work_package(work_package_guid: str) -> dict:
+    """Withdraw a Work Package (PPF action S1ITR_REJECT_SCOPE — 'Reject')."""
+    g = _dash(work_package_guid)
+    with SolmanClient(service=config.SVC_GENERIC) as c:
+        c.function("PPF_ACTION", {"ActionDesc": "", "ActionId": "S1ITR_REJECT_SCOPE", "WsGuid": g})
+    return {"work_package_guid": g, "withdrawn": True}

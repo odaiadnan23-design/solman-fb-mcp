@@ -216,8 +216,14 @@ def create_work_package(
 
 @mcp.tool()
 def assign_work_package(requirement_guid: str, work_package_guid: str) -> str:
-    """Link an existing Work Package to a requirement (requirement must be Approved)."""
+    """Link an existing Work Package to a requirement (requirement must be Approved). Self-verifies the link."""
     return _wrap(wp.assign_work_package, requirement_guid, work_package_guid)
+
+
+@mcp.tool()
+def withdraw_work_package(work_package_guid: str) -> str:
+    """Withdraw a Work Package (rejects its scope)."""
+    return _wrap(wp.withdraw_work_package, work_package_guid)
 
 
 if __name__ == "__main__":
