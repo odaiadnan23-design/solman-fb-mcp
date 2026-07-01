@@ -60,6 +60,14 @@ DEFAULT_TEAM_BP = _req("SOLMAN_TEAM_BP")
 DEFAULT_PLANNED_PROJECT = _req("SOLMAN_PLANNED_PROJECT")
 DEFAULT_PLANNED_PROJECT_GUID = _req("SOLMAN_PLANNED_PROJECT_GUID")
 
+# Work Package defaults (release/project targeting — site + release specific).
+WP_PROJECT = os.environ.get("SOLMAN_WP_PROJECT", "")                    # e.g. GORE_REL_8.0_9.0_BUILD
+WP_PROJECT_PHASE = os.environ.get("SOLMAN_WP_PROJECT_PHASE", "")        # project phase GUID
+WP_RELEASE = os.environ.get("SOLMAN_WP_RELEASE", "")                    # RequestedRelease description
+WP_RELEASE_COMPONENT = os.environ.get("SOLMAN_WP_RELEASE_COMPONENT", "")
+WP_RELEASE_NUMBER = os.environ.get("SOLMAN_WP_RELEASE_NUMBER", "")
+WP_DEV_TEAM_BP = os.environ.get("SOLMAN_WP_DEV_TEAM_BP", "")
+
 # --- Local, out-of-repo state (mirrors VSP's ~/.vsp convention) -----------
 VSP_DIR = Path(os.environ.get("VSP_DIR", Path.home() / ".vsp"))
 COOKIE_FILE = Path(os.environ.get("SOLMAN_COOKIE_FILE", VSP_DIR / "cookies-pm1.txt"))

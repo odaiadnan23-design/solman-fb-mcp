@@ -61,8 +61,10 @@ once and the cookie is reused:
 | `create_requirement(title, priority, classification, …)` | Create a requirement. Title truncated to 40; `external_reference` → the ZZFLD00000B custom field. Optional `element_id` attaches a Solution element. |
 | `update_requirement(guid, …)` | MERGE-update editable fields |
 | `list_requirement_actions(guid)` | List available lifecycle actions |
-| `withdraw_requirement(guid)` | Withdraw/cancel (PPF action) |
-| `submit_requirement_for_approval(guid)` | Send for approval |
+| `withdraw_requirement(guid)` | Withdraw/cancel a Draft/To-Be-Approved requirement (PPF action) |
+| `submit_requirement_for_approval(guid)` | Draft → To Be Approved |
+| `approve_requirement(guid)` | To Be Approved → Approved (required before a WP can be linked) |
+| `reject_requirement(guid)` | To Be Approved → Rejected |
 | `execute_requirement_action(guid, action_id)` | Run any lifecycle action |
 | `search_solution_elements(query, branch_id)` | Flat search of SolDoc elements by name |
 | `attach_element(requirement_guid, element_id, …)` | Attach a SolDoc element to a requirement |
@@ -72,6 +74,8 @@ once and the cookie is reused:
 | `soldoc_list_scopes(branch_id)` | Scopes/views for a branch (Show All, team/release scopes) |
 | `soldoc_browse(parent_element_id, branch_id, scope)` | Navigate the process-structure tree — empty parent = roots, else children. Drill via `element_id` where `has_children`. |
 | `soldoc_get_element(element_id, branch_id)` | Resolve one element (type + full path) by id |
+| `create_work_package(requirement_guid, title, …)` | Create a Work Package (ProcessType S1IT) and link it to its (Approved) requirement |
+| `assign_work_package(requirement_guid, work_package_guid)` | Link an existing WP to an Approved requirement |
 
 ## Files
 
@@ -101,3 +105,12 @@ once and the cookie is reused:
   (`/Libraries/…`). A step can be referenced into multiple parents — pick the right one.
 - `$format=json` is rejected on write requests (use the `Accept` header).
 - The WORKSPACE `Guid` (dashed) ↔ `RequirementGuid` (no dashes, upper) — handled internally.
+- **Requirement → Work Package chain:** the requirement must be **Approved** before a WP links
+  to it (`Assign_Existing_Wp` silently no-ops otherwise). WP create = `POST BRWPSet` (`TypeId="WP"`,
+  ProcessType `S1IT`); the create's `REQUIREMENTS` array does NOT persist the link — the
+  `Assign_Existing_Wp(WpGuid, RequirementGuid)` function import does. WP targeting (project/phase/
+  release) comes from `SOLMAN_WP_*` config. Withdraw a WP via PPF action `S1ITR_REJECT_SCOPE`.
+- **Lifecycle note:** an **Approved** requirement can no longer be Withdrawn — only **Postponed**
+  (`S1BR_POSTPONE`). Withdraw (`S1BR_CANCEL`) is only available from Draft / To Be Approved.
+- Work Items are WP **scope items** (`BTSCOPE`): `POST WORKSPACESET(<WP guid>,'S1IT')/BTSCOPESet`
+  (not yet exposed as a tool).

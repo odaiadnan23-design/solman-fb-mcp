@@ -14,8 +14,10 @@ REQUIREMENT_PROCESS_TYPE = config.REQUIREMENT_PROCESS_TYPE  # Focused Build "Req
 
 # Lifecycle changes are PPF ACTIONS (not field writes — MERGE of StatusId is a no-op).
 # Available actions depend on current status; list_actions() reads them per requirement.
-ACTION_WITHDRAW = f"{REQUIREMENT_PROCESS_TYPE}_CANCEL"            # Draft -> Canceled (E0006)
-ACTION_SEND_FOR_APPROVAL = f"{REQUIREMENT_PROCESS_TYPE}_SEND_FOR_APPROVAL"
+ACTION_WITHDRAW = f"{REQUIREMENT_PROCESS_TYPE}_CANCEL"            # -> Canceled (E0006)
+ACTION_SEND_FOR_APPROVAL = f"{REQUIREMENT_PROCESS_TYPE}_SEND_FOR_APPROVAL"  # Draft -> To Be Approved
+ACTION_APPROVE = f"{REQUIREMENT_PROCESS_TYPE}_CONFIRMED"         # To Be Approved -> Approved
+ACTION_REJECT = f"{REQUIREMENT_PROCESS_TYPE}_REJECTED"           # -> Rejected
 
 # Classification -> ClassifAttributes {Key, Value} (WRICEFSet).
 CLASSIFICATION = {
@@ -238,6 +240,16 @@ def withdraw_requirement(guid: str) -> dict:
 def submit_for_approval(guid: str) -> dict:
     """Send a requirement for approval — Draft -> To Be Approved."""
     return execute_action(guid, ACTION_SEND_FOR_APPROVAL)
+
+
+def approve_requirement(guid: str) -> dict:
+    """Approve a requirement — To Be Approved -> Approved (required before WP assignment)."""
+    return execute_action(guid, ACTION_APPROVE)
+
+
+def reject_requirement(guid: str) -> dict:
+    """Reject a requirement — To Be Approved -> Rejected."""
+    return execute_action(guid, ACTION_REJECT)
 
 
 def attach_element(requirement_guid: str, element_id: str, branch_id: str | None = None,

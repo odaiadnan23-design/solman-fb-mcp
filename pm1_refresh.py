@@ -91,24 +91,27 @@ def refresh(timeout_s: int, headless: bool) -> int:
             except Exception as exc:  # noqa: BLE001 - navigation may bounce through IdP
                 print(f"[pm1-refresh] initial nav note: {exc}")
 
+            # Poll the real API until it returns metadata (edmx) — i.e. SAML/IAS login
+            # is actually complete. Cookie *presence* isn't enough: a pre-auth
+            # SAP_SESSIONID appears before login finishes.
             deadline = time.monotonic() + timeout_s
+            ok = False
             while time.monotonic() < deadline:
-                if _session_cookie_present(ctx.cookies()):
-                    break
-                time.sleep(2)
-            else:
-                print("[pm1-refresh] FAILED: no SAP session cookie within timeout.", file=sys.stderr)
+                try:
+                    resp = ctx.request.get(probe, ignore_https_errors=True)
+                    if resp.ok and "edmx" in resp.text().lower():
+                        ok = True
+                        break
+                except Exception:  # noqa: BLE001 - transient during redirects
+                    pass
+                time.sleep(3)
+            if not ok:
+                print("[pm1-refresh] FAILED: not authenticated within timeout — "
+                      "complete the IAS login in the browser window.", file=sys.stderr)
                 return 2
-
-            # Confirm the session actually works against the allowed path.
-            resp = ctx.request.get(probe, ignore_https_errors=True)
-            ok = resp.ok and "edmx" in resp.text().lower()
             n = _write_netscape(ctx.cookies(), config.COOKIE_FILE)
-            if ok:
-                print(f"[pm1-refresh] OK: session verified (HTTP {resp.status}); wrote {n} cookies.")
-                return 0
-            print(f"[pm1-refresh] WARN: cookie saved ({n}) but probe returned HTTP {resp.status}.", file=sys.stderr)
-            return 3
+            print(f"[pm1-refresh] OK: session verified; wrote {n} cookies.")
+            return 0
         finally:
             ctx.close()
 

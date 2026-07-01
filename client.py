@@ -89,10 +89,18 @@ class SolmanClient:
         return token
 
     # -- reads -------------------------------------------------------------
+    def _check_session(self, r: httpx.Response) -> None:
+        """An expired SAML/IAS session returns the login HTML (200), not JSON."""
+        if "text/html" in r.headers.get("content-type", "").lower():
+            raise SessionExpired(
+                "PM1 session expired (SAML login page returned). Run: python pm1_refresh.py"
+            )
+
     def get(self, path: str, params: dict | None = None) -> dict:
         p = {"$format": "json", **(params or {})}
         r = self._http.get(f"{self.service}/{path}", params=p, headers={"Accept": "application/json"})
         self._raise_for_auth(r)
+        self._check_session(r)
         if r.status_code >= 400:
             raise SolmanError(f"GET {path} -> {r.status_code}: {_sap_error_message(r)}")
         return r.json()

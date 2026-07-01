@@ -14,6 +14,7 @@ from mcp.server.fastmcp import FastMCP
 
 import requirements as rq
 import soldoc as sd
+import workpackages as wp
 from client import SessionExpired, SolmanError
 
 mcp = FastMCP("solman-fb")
@@ -120,6 +121,18 @@ def submit_requirement_for_approval(guid: str) -> str:
 
 
 @mcp.tool()
+def approve_requirement(guid: str) -> str:
+    """Approve a requirement (To Be Approved -> Approved). Required before a Work Package can be linked."""
+    return _wrap(rq.approve_requirement, guid)
+
+
+@mcp.tool()
+def reject_requirement(guid: str) -> str:
+    """Reject a requirement (To Be Approved -> Rejected)."""
+    return _wrap(rq.reject_requirement, guid)
+
+
+@mcp.tool()
 def execute_requirement_action(guid: str, action_id: str) -> str:
     """Execute a specific lifecycle action by id (from list_requirement_actions). Returns resulting status."""
     return _wrap(rq.execute_action, guid, action_id)
@@ -178,6 +191,33 @@ def soldoc_browse(parent_element_id: str = "", branch_id: str = "", scope: str =
 def soldoc_get_element(element_id: str, branch_id: str = "") -> str:
     """Read a single SolDoc tree node (incl. full path) by element id."""
     return _wrap(sd.get_element, element_id, branch_id or None)
+
+
+# --- Work Packages ---------------------------------------------------------
+@mcp.tool()
+def create_work_package(
+    requirement_guid: str,
+    title: str,
+    assign: bool = True,
+    classification: str = "fit",
+    priority: str = "",
+    category_id: str = "",
+    long_description: str = "",
+) -> str:
+    """Create a Work Package (ProcessType S1IT) and link it to its requirement.
+
+    The requirement MUST be Approved first (use approve_requirement) — otherwise the link
+    silently fails and this raises. Release/project targeting comes from SOLMAN_WP_* config.
+    Returns {work_package_id, work_package_guid, assigned}.
+    """
+    return _wrap(wp.create_work_package, requirement_guid, title, assign, category_id,
+                 classification, priority, "", "", long_description)
+
+
+@mcp.tool()
+def assign_work_package(requirement_guid: str, work_package_guid: str) -> str:
+    """Link an existing Work Package to a requirement (requirement must be Approved)."""
+    return _wrap(wp.assign_work_package, requirement_guid, work_package_guid)
 
 
 if __name__ == "__main__":
