@@ -75,7 +75,8 @@ once and the cookie is reused:
 | `soldoc_browse(parent_element_id, branch_id, scope)` | Navigate the process-structure tree — empty parent = roots, else children. Drill via `element_id` where `has_children`. |
 | `soldoc_get_element(element_id, branch_id)` | Resolve one element (type + full path) by id |
 | `create_work_package(requirement_guid, title, …)` | Create a Work Package (ProcessType S1IT) and link it to its (Approved) requirement |
-| `assign_work_package(requirement_guid, work_package_guid)` | Link an existing WP to an Approved requirement |
+| `assign_work_package(requirement_guid, work_package_guid)` | Link an existing WP to an Approved requirement (self-verified) |
+| `withdraw_work_package(work_package_guid)` | Withdraw a WP (rejects its scope) |
 
 ## Files
 
@@ -110,6 +111,8 @@ once and the cookie is reused:
   ProcessType `S1IT`); the create's `REQUIREMENTS` array does NOT persist the link — the
   `Assign_Existing_Wp(WpGuid, RequirementGuid)` function import does. WP targeting (project/phase/
   release) comes from `SOLMAN_WP_*` config. Withdraw a WP via PPF action `S1ITR_REJECT_SCOPE`.
+  The link is **self-verified** by reading `WORKSPACESET(<wp>,'S1IT')/BT_RELATEDTRANSSet` (the linked
+  requirement appears there as a `WsType='Requirement'` row) — so `assigned` reflects the real state.
 - **Lifecycle note:** an **Approved** requirement can no longer be Withdrawn — only **Postponed**
   (`S1BR_POSTPONE`). Withdraw (`S1BR_CANCEL`) is only available from Draft / To Be Approved.
 - Work Items are WP **scope items** (`BTSCOPE`): `POST WORKSPACESET(<WP guid>,'S1IT')/BTSCOPESet`
