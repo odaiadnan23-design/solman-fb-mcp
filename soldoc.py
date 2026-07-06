@@ -14,7 +14,7 @@ Node types: E2EROOT / LIBROOT / FOLDER / PROC / PROCSTEP / *LOGCOMP (executables
 from __future__ import annotations
 
 import config
-from client import SolmanClient
+from client import SolmanClient, odata_literal
 
 def _branch(b: str | None) -> str:
     return b or config.DEFAULT_BRANCH_ID
@@ -69,9 +69,9 @@ def browse(parent_element_id: str = "", branch: str | None = None,
     """List tree nodes: top-level when parent_element_id is empty, else the node's children."""
     b = _branch(branch)
     scope_id = resolve_scope(scope, b)
-    flt = f"ScopeId eq '{scope_id}'"
+    flt = f"ScopeId eq '{odata_literal(scope_id)}'"
     if parent_element_id:
-        flt += f" and ParentElementId eq '{parent_element_id}'"
+        flt += f" and ParentElementId eq '{odata_literal(parent_element_id)}'"
     with SolmanClient(service=config.SVC_SOLDOC) as c:
         rows = c.results(f"{_crm_key(b)}/elementsTree", {"$filter": flt, "$top": str(top)})
     return [_node(x) for x in rows]
@@ -85,5 +85,5 @@ def get_element(element_id: str, branch: str | None = None) -> dict:
     """
     b = _branch(branch)
     with SolmanClient(service=config.SVC_BIZ_REQ) as c:
-        rows = c.results("ELEMENTSet", {"$filter": f"BranchId eq '{b}' and ElementId eq '{element_id}'", "$top": "1"})
+        rows = c.results("ELEMENTSet", {"$filter": f"BranchId eq '{odata_literal(b)}' and ElementId eq '{odata_literal(element_id)}'", "$top": "1"})
     return _node(rows[0]) if rows else {}

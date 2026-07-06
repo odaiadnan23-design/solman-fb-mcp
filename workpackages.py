@@ -14,7 +14,7 @@ import re
 from typing import Any
 
 import config
-from client import SolmanClient, SolmanError
+from client import SolmanClient, SolmanError, client_for
 from requirements import CLASSIFICATION, _dash, MAX_TITLE, get_requirement
 
 WP_PROCESS_TYPE = "S1IT"
@@ -109,6 +109,9 @@ def create_work_package(
         if assign and wp_guid:
             c.function("Assign_Existing_Wp", {"WpGuid": wp_guid, "RequirementGuid": req_guid})
             result["assigned"] = link_verified(wp_guid, req_guid)  # self-verify the link persisted
+            if not result["assigned"]:
+                result["warning"] = ("WP created but link to requirement not verified — "
+                                     "check the requirement is Approved, then use assign_work_package.")
     return result
 
 
@@ -124,9 +127,23 @@ def assign_work_package(requirement_guid: str, work_package_guid: str) -> dict:
             )
         c.function("Assign_Existing_Wp", {"WpGuid": wp_guid, "RequirementGuid": req_guid})
     assigned = link_verified(wp_guid, req_guid)
+    out = {"requirement_guid": req_guid, "work_package_guid": wp_guid, "assigned": assigned}
     if not assigned:
-        raise SolmanError(f"Assign call returned but WP {wp_guid} is not linked to {req_guid} (verify failed).")
-    return {"requirement_guid": req_guid, "work_package_guid": wp_guid, "assigned": True}
+        out["warning"] = "Assign call returned but the link could not be verified."
+    return out
+
+
+def list_work_items(work_package_guid: str) -> list[dict]:
+    """List the Work Items (scope items / BTSCOPE) under a Work Package."""
+    g = _redash(_dash(work_package_guid))
+    key = f"WORKSPACESET(Guid=guid'{g}',ProcessType='{WP_PROCESS_TYPE}')/BTSCOPESet"
+    rows = client_for(config.SVC_GENERIC).results(key)
+    return [{"item_guid": r.get("WpItemGuid"), "type": r.get("WpType"),
+             "description": r.get("WpDescription"), "status": r.get("WpStatus"),
+             "wricef": r.get("Wricef"), "config_item": r.get("ConfigItem"),
+             "sprint": r.get("Sprint"), "priority_id": r.get("PriorityId"),
+             "value_points": r.get("ValuePoints"), "story_points": r.get("StoryPoints"),
+             "text": r.get("Text")} for r in rows]
 
 
 def withdraw_work_package(work_package_guid: str) -> dict:

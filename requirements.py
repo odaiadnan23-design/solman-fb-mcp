@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 import config
-from client import SolmanClient, SolmanError
+from client import SolmanClient, SolmanError, client_for, odata_literal
 
 REQUIREMENT_PROCESS_TYPE = config.REQUIREMENT_PROCESS_TYPE  # Focused Build "Requirement" txn type
 
@@ -55,7 +55,7 @@ def search_requirements(query: str = "", top: int = 25) -> list[dict]:
     """Search requirements by title substring (via CRM_GENERIC_SRV WORKSPACESET)."""
     flt = f"ProcessType eq '{REQUIREMENT_PROCESS_TYPE}'"
     if query:
-        flt += f" and substringof('{query}',Description)"
+        flt += f" and substringof('{odata_literal(query)}',Description)"
     with SolmanClient(service=config.SVC_GENERIC) as c:
         rows = c.results("WORKSPACESET", {"$filter": flt, "$top": str(top)})
     return [{"id": r.get("ObjectId"), "guid": r.get("Guid"), "title": r.get("Description"),
@@ -103,7 +103,7 @@ def branches_for_solution(solution_id: str) -> list[dict]:
 def search_solution_elements(query: str, branch_id: str = "", top: int = 15) -> list[dict]:
     """Search Solution Documentation elements by name substring within a branch."""
     branch_id = branch_id or DEFAULTS["BranchId"]
-    flt = f"BranchId eq '{branch_id}' and substringof('{query}',ElementName)"
+    flt = f"BranchId eq '{odata_literal(branch_id)}' and substringof('{odata_literal(query)}',ElementName)"
     with SolmanClient(service=config.SVC_BIZ_REQ) as c:
         rows = c.results("ELEMENTSet", {"$filter": flt, "$top": str(top)})
     return [{"element_id": r.get("ElementId"), "name": r.get("ElementName"),
@@ -261,3 +261,25 @@ def attach_element(requirement_guid: str, element_id: str, branch_id: str | None
     if not ok:
         raise SolmanError(f"Element {element_id} did not attach to {g} (verify failed).")
     return {"guid": g, "element_attached": element_id, "verified": True}
+
+
+def list_elements(requirement_guid: str) -> list[dict]:
+    """List the Solution Documentation elements attached to a requirement."""
+    g = _dash(requirement_guid)
+    with SolmanClient(service=config.SVC_BIZ_REQ) as c:
+        rows = c.results(f"REQUIREMENTSet(WpGuid='',RequirementGuid='{g}')/REQELEMENTSet")
+    return [{"element_id": r.get("ElementId"), "name": r.get("ElementName"),
+             "type": r.get("ElementTypeId"), "path": r.get("ElementPath"),
+             "branch_id": r.get("BranchId"), "scope_id": r.get("ScopeId")} for r in rows]
+
+
+def detach_element(requirement_guid: str, element_id: str, branch_id: str | None = None) -> dict:
+    """Detach a Solution Documentation element from a requirement (UNASSIGN_BR_FROM_ELEMENT), verified."""
+    g = _dash(requirement_guid)
+    with SolmanClient(service=config.SVC_BIZ_REQ) as c:
+        c.function("UNASSIGN_BR_FROM_ELEMENT",
+                   {"RequirementGuid": g, "elementId": element_id,
+                    "BranchId": branch_id or DEFAULTS["BranchId"]})
+        still = any(e.get("ElementId") == element_id
+                    for e in c.results(f"REQUIREMENTSet(WpGuid='',RequirementGuid='{g}')/REQELEMENTSet"))
+    return {"guid": g, "element_detached": element_id, "removed": not still}

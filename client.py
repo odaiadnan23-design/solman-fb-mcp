@@ -39,6 +39,11 @@ def load_cookies(path: Path = config.COOKIE_FILE) -> dict[str, str]:
     return cookies
 
 
+def odata_literal(value: str) -> str:
+    """Escape a string for use inside an OData v2 single-quoted literal (' -> '')."""
+    return str(value).replace("'", "''")
+
+
 def _sap_error_message(resp: httpx.Response) -> str:
     try:
         err = resp.json().get("error", {})
@@ -158,3 +163,47 @@ class SolmanClient:
             self._csrf = None
             r = call(self._ensure_csrf())
         return r
+
+
+# --- Shared client cache (reused across calls; reloads when the cookie changes) ---
+_CLIENTS: dict[str, tuple["SolmanClient", float]] = {}
+
+
+def _cookie_mtime() -> float:
+    try:
+        return config.COOKIE_FILE.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def client_for(service: str = config.SVC_BIZ_REQ) -> "SolmanClient":
+    """Return a cached client for a service, rebuilt if the cookie file changed on disk.
+
+    Reuses the httpx connection pool and CSRF token across calls; picks up a fresh
+    session automatically after pm1_refresh.py rewrites the cookie file.
+    """
+    mtime = _cookie_mtime()
+    cached = _CLIENTS.get(service)
+    if cached and cached[1] == mtime:
+        return cached[0]
+    if cached:
+        cached[0].close()
+    _CLIENTS[service] = (SolmanClient(service), mtime)
+    return _CLIENTS[service][0]
+
+
+def reset_clients() -> None:
+    """Drop all cached clients (e.g. after a session error)."""
+    for c, _ in _CLIENTS.values():
+        c.close()
+    _CLIENTS.clear()
+
+
+def session_status() -> dict:
+    """Cheap check that the cookie is present and the session is live."""
+    try:
+        client_for(config.SVC_BIZ_REQ).get("PRIORITYSet", {"$top": "1"})
+        return {"valid": True, "host": config.SAP_HOST, "client": config.SAP_CLIENT}
+    except SessionExpired as e:
+        reset_clients()
+        return {"valid": False, "reason": str(e)}

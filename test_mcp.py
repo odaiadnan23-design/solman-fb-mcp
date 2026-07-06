@@ -49,6 +49,9 @@ try:
     print("\n[search_solution_elements '10.05.0106']\n", call("search_solution_elements", {"query": "10.05.0106"}))
     print("\n[search_requirements 'CFIN' top 3]\n", call("search_requirements", {"query": "CFIN", "top": 3}))
     print("\n[soldoc_browse roots]\n", call("soldoc_browse", {}))
+    print("\n[session_status]\n", call("session_status", {}))
+    print("\n[list_process_types]\n", call("list_process_types", {}))
+    print("\n[search_workspaces defect top 2]\n", call("search_workspaces", {"process_type": "defect", "top": 2}))
     print("\nOK: server serves live read tools over MCP stdio.")
 finally:
     proc.stdin.close()

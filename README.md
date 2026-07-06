@@ -56,6 +56,8 @@ once and the cookie is reused:
 
 | Tool | Purpose |
 |------|---------|
+| `session_status()` | Check the session is live (else run pm1_refresh.py) |
+| `list_process_types()` | List Focused Build object types (Requirement, WP, Defect, RfC, Risk, …) |
 | `search_requirements(query, top)` | Find requirements by title substring |
 | `get_requirement(guid)` | Read a requirement in full |
 | `create_requirement(title, priority, classification, …)` | Create a requirement. Title truncated to 40; `external_reference` → the ZZFLD00000B custom field. Optional `element_id` attaches a Solution element. |
@@ -68,6 +70,8 @@ once and the cookie is reused:
 | `execute_requirement_action(guid, action_id)` | Run any lifecycle action |
 | `search_solution_elements(query, branch_id)` | Flat search of SolDoc elements by name |
 | `attach_element(requirement_guid, element_id, …)` | Attach a SolDoc element to a requirement |
+| `list_requirement_elements(requirement_guid)` | List the SolDoc elements attached to a requirement |
+| `detach_element(requirement_guid, element_id, …)` | Detach a SolDoc element from a requirement |
 | `list_lookup(kind)` | Reference values: solutions/priorities/classifications/categories/statuses/projects |
 | `list_branches(solution_id)` | Branches for a solution |
 | `soldoc_context(branch_id)` | SolDoc root context (solution/branch names) |
@@ -77,6 +81,31 @@ once and the cookie is reused:
 | `create_work_package(requirement_guid, title, …)` | Create a Work Package (ProcessType S1IT) and link it to its (Approved) requirement |
 | `assign_work_package(requirement_guid, work_package_guid)` | Link an existing WP to an Approved requirement (self-verified) |
 | `withdraw_work_package(work_package_guid)` | Withdraw a WP (rejects its scope) |
+| `list_work_items(work_package_guid)` | List the Work Items (scope items) under a WP |
+| **Generic (any object type)** | |
+| `search_workspaces(process_type, query, top)` | Search any type (defect, request_for_change, risk, work_item_nc, …) by title |
+| `get_workspace(id_or_guid, process_type)` | Read any object's header by ObjectId or GUID |
+| `list_workspace_actions(id_or_guid, process_type)` | List lifecycle actions for any object |
+| `execute_workspace_action(id_or_guid, action_id, process_type)` | Run a lifecycle action on any object |
+
+## Coverage (toward full browser parity)
+
+**Covered**
+- **Requirements** — full CRUD: create, read, search, update, attach/list/detach SolDoc elements, and the whole lifecycle (submit → approve/reject/withdraw, or any action via `execute_requirement_action`).
+- **Work Packages** — create (auto-links to an Approved requirement, self-verified), assign existing, withdraw, list Work Items.
+- **SolDoc hierarchy** — navigate the process tree (`soldoc_*`), list scopes, search elements.
+- **All object types (read + lifecycle)** — Defect, Request for Change, Risk, Master WP, Work Item, Urgent Change, Defect Correction, plus Requirement/WP — via the generic `search_workspaces` / `get_workspace` / `list_workspace_actions` / `execute_workspace_action` (built on `CRM_GENERIC_SRV`, so one uniform interface across every `ProcessType`).
+
+**Not built yet** (needs more UI capture / per-type flows)
+- Creating **Work Items** (BTSCOPE scope-item *fill* step — read is covered by `list_work_items`).
+- Editing **WP fields** and WP↔requirement **unassign** (`wpUnassignmentFromRequirement` — structured param, uncaptured).
+- Type-specific **create** flows for Defect / RfC / Risk (each is its own form).
+- **Attachments/documents** (`DROP_DOC_SRV`) and deeper SolDoc (attributes, assigned docs/test cases, structure editing).
+- Richer requirement/query **filters** (by status/project/owner) beyond title substring.
+
+## Connectivity
+
+The HTTP client is **reused across calls** (one cookie load + one CSRF token, connection-pooled) and **auto-reloads** when `pm1_refresh.py` rewrites the cookie file (`client_for()` watches the file mtime). `session_status()` gives a cheap liveness check; an expired SAML session is detected (login-HTML response) and reported as `SESSION EXPIRED` rather than crashing. Refresh is still out-of-band (`pm1_refresh.py`). *Future:* a periodic keepalive ping to reduce session expiries.
 
 ## Files
 
@@ -84,9 +113,11 @@ once and the cookie is reused:
 - `pm1_refresh.py` / `pm1-refresh.ps1` — Playwright SSO cookie minting
 - `client.py` — cookie-only httpx client (CSRF, get/create/merge/function)
 - `requirements.py` — requirement domain operations
+- `workpackages.py` — Work Package create/assign/withdraw + list work items
+- `workspaces.py` — generic operations for every object type (`CRM_GENERIC_SRV`)
 - `soldoc.py` — Solution Documentation tree navigation (`soldoc_node_selection_srv`)
-- `server.py` — FastMCP stdio server
-- `test_mcp.py` — read-only MCP stdio smoke test
+- `server.py` — FastMCP stdio server (30 tools)
+- `test_mcp.py` — read-only MCP stdio smoke test · `test_units.py` — offline unit tests
 
 ## Notes / gotchas (verified against a live SolMan 7.2 Focused Build system)
 

@@ -12,22 +12,38 @@ import json
 
 from mcp.server.fastmcp import FastMCP
 
+import config
 import requirements as rq
 import soldoc as sd
 import workpackages as wp
-from client import SessionExpired, SolmanError
+import workspaces as wsp
+from client import SessionExpired, SolmanError, session_status
 
 mcp = FastMCP("solman-fb")
 
 
 def _wrap(fn, *args, **kwargs) -> str:
-    """Run a domain call, returning JSON text or a clean error string."""
+    """Run a domain call, returning JSON text or a clean error string (never a stack trace)."""
     try:
         return json.dumps(fn(*args, **kwargs), indent=2, default=str)
     except SessionExpired as e:
         return f"SESSION EXPIRED: {e}"
     except (SolmanError, ValueError) as e:
         return f"ERROR: {e}"
+    except Exception as e:  # noqa: BLE001 - surface a clean message, not a traceback
+        return f"ERROR ({type(e).__name__}): {e}"
+
+
+@mcp.tool()
+def session_status() -> str:
+    """Check whether the PM1 session is live. If not, run pm1_refresh.py to re-authenticate."""
+    return _wrap(session_status)
+
+
+@mcp.tool()
+def list_process_types() -> str:
+    """List the Focused Build object/transaction types on this system (Requirement, Work Package, Defect, …)."""
+    return _wrap(wsp.list_process_types)
 
 
 @mcp.tool()
@@ -152,6 +168,18 @@ def attach_element(requirement_guid: str, element_id: str, branch_id: str = "",
 
 
 @mcp.tool()
+def list_requirement_elements(requirement_guid: str) -> str:
+    """List the Solution Documentation elements attached to a requirement."""
+    return _wrap(rq.list_elements, requirement_guid)
+
+
+@mcp.tool()
+def detach_element(requirement_guid: str, element_id: str, branch_id: str = "") -> str:
+    """Detach a Solution Documentation element from a requirement (verified)."""
+    return _wrap(rq.detach_element, requirement_guid, element_id, branch_id or None)
+
+
+@mcp.tool()
 def list_lookup(kind: str = "priorities", top: int = 50) -> str:
     """List reference values. kind: solutions|priorities|classifications|categories|statuses|projects."""
     return _wrap(rq.lookup, kind, top)
@@ -226,5 +254,39 @@ def withdraw_work_package(work_package_guid: str) -> str:
     return _wrap(wp.withdraw_work_package, work_package_guid)
 
 
+@mcp.tool()
+def list_work_items(work_package_guid: str) -> str:
+    """List the Work Items (scope items) under a Work Package."""
+    return _wrap(wp.list_work_items, work_package_guid)
+
+
+# --- Generic workspace layer (any Focused Build object type) ---------------
+@mcp.tool()
+def search_workspaces(process_type: str, query: str = "", top: int = 25) -> str:
+    """Search any Focused Build object type by title. process_type: friendly key (requirement,
+    work_package, work_item_nc, defect, request_for_change, risk, master_work_package, …) or a
+    code (S1BR/S1IT/…). Returns id, guid, type, title, status. See list_process_types."""
+    return _wrap(wsp.search_workspaces, process_type, query, top)
+
+
+@mcp.tool()
+def get_workspace(id_or_guid: str, process_type: str) -> str:
+    """Read a workspace header (any object type) by ObjectId or GUID + process_type."""
+    return _wrap(wsp.get_workspace, id_or_guid, process_type)
+
+
+@mcp.tool()
+def list_workspace_actions(id_or_guid: str, process_type: str) -> str:
+    """List the lifecycle actions available for any object (Defect/RfC/Risk/WP/…) by id + process_type."""
+    return _wrap(wsp.list_actions, id_or_guid, process_type)
+
+
+@mcp.tool()
+def execute_workspace_action(id_or_guid: str, action_id: str, process_type: str) -> str:
+    """Execute a lifecycle action (from list_workspace_actions) on any object. Returns resulting status."""
+    return _wrap(wsp.execute_action, id_or_guid, action_id, process_type)
+
+
 if __name__ == "__main__":
+    config.require_host()   # fail fast with a clear message if .env isn't configured
     mcp.run()
