@@ -133,6 +133,59 @@ def assign_work_package(requirement_guid: str, work_package_guid: str) -> dict:
     return out
 
 
+_WI_TYPES = {"nc": "S1MJ", "gc": "S1CG", "S1MJ": "S1MJ", "S1CG": "S1CG"}
+
+
+def create_work_item(work_package_guid: str, description: str, wricef: str = "non-functional",
+                     text: str = "", config_item: str = "", wp_type: str = "nc",
+                     sprint: str = "", priority: str = "4", ibase_instance: str = "",
+                     cmp_desc: str = "", wp_system: str = "", proc_type_desc: str = "") -> dict:
+    """Create a Work Item (scope item) under a Work Package.
+
+    Two-step (mirrors the UI): add an empty BTSCOPE row (returns WpItemGuid), then POST the
+    filled row. wricef: fit|gap|wricef|non-functional. wp_type: nc (S1MJ) | gc (S1CG).
+    A Work Item references a technical component — pass config_item (+ ibase_instance/cmp_desc/
+    wp_system/proc_type_desc) from the WP's SCOPE_COMPONENT value help for it to persist.
+    """
+    if not description:
+        raise ValueError("description is required")
+    cls = CLASSIFICATION.get(wricef.lower())
+    if not cls:
+        raise ValueError(f"wricef must be one of {list(CLASSIFICATION)}")
+    wtype = _WI_TYPES.get(wp_type, wp_type.upper())
+    wpg = _dash(work_package_guid)
+    nav = f"WORKSPACESET(Guid=guid'{_redash(wpg)}',ProcessType='{WP_PROCESS_TYPE}')/BTSCOPESet"
+    c = client_for(config.SVC_GENERIC)
+
+    added = c.create(nav, {  # step 1: empty scope row (mirror the UI's template)
+        "WpGuid": "", "WpType": "", "WpDescription": "", "WpSystem": "", "WpScope": "",
+        "WpStatus": "", "WpItemGuid": "", "ProcTypeDesc": "", "Sprint": "", "Wricef": "",
+        "IbaseInstance": "", "Text": "", "Changeable": True, "Url": "", "WricefKey": "",
+        "ConfigItem": "", "CmpDesc": "", "ValuePoints": 0, "StoryPoints": 0, "PriorityId": priority})
+    item_guid = added.get("WpItemGuid")
+    if not item_guid:
+        raise SolmanError("Work Item add returned no WpItemGuid (could not create the scope row).")
+
+    body = {  # step 2: fill the row
+        "WpGuid": wpg, "WpItemGuid": item_guid, "WpType": wtype,
+        "WpDescription": description[:MAX_TITLE], "Wricef": cls[0], "WricefKey": cls[0],
+        "Text": text, "PriorityId": priority, "Changeable": True,
+        "ValuePoints": 0, "StoryPoints": 0,
+        "ConfigItem": config_item, "IbaseInstance": ibase_instance, "CmpDesc": cmp_desc,
+        "WpSystem": wp_system, "ProcTypeDesc": proc_type_desc, "Sprint": sprint,
+        "WpScope": "", "WpStatus": "", "Url": "", "ZZFLD00000B": "", "ZFC_ZFLD00000B": 0}
+    c.create("BTSCOPESET", body)
+
+    if not any(i.get("item_guid") == item_guid for i in list_work_items(work_package_guid)):
+        raise SolmanError(
+            "Work Item did not persist. BTSCOPE scope items live inside the WP's stateful CRM "
+            "one-order document: POST BTSCOPESET returns a transient row that needs a separate "
+            "commit/save (not yet reproduced headlessly). Create Work Items in the UI for now. "
+            "list_work_items() reads them fine.")
+    return {"work_package_guid": wpg, "work_item_guid": item_guid, "type": wtype,
+            "description": description[:MAX_TITLE], "created": True}
+
+
 def list_work_items(work_package_guid: str) -> list[dict]:
     """List the Work Items (scope items / BTSCOPE) under a Work Package."""
     g = _redash(_dash(work_package_guid))

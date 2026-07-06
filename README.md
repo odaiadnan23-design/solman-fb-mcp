@@ -97,7 +97,7 @@ once and the cookie is reused:
 - **All object types (read + lifecycle)** — Defect, Request for Change, Risk, Master WP, Work Item, Urgent Change, Defect Correction, plus Requirement/WP — via the generic `search_workspaces` / `get_workspace` / `list_workspace_actions` / `execute_workspace_action` (built on `CRM_GENERIC_SRV`, so one uniform interface across every `ProcessType`).
 
 **Not built yet** (needs more UI capture / per-type flows)
-- Creating **Work Items** (BTSCOPE scope-item *fill* step — read is covered by `list_work_items`).
+- Creating **Work Items** — `BTSCOPE` scope items live inside the WP's *stateful CRM one-order document*. The two UI steps (add empty row → fill with a `ConfigItem` from the component value-help) were captured and reproduced, but a stateless `POST BTSCOPESET` returns a **transient** row that never commits — there's a one-order save/commit step not yet reverse-engineered. `list_work_items` (read) works; `create_work_item` is coded and fails loudly rather than silently no-op'ing.
 - Editing **WP fields** and WP↔requirement **unassign** (`wpUnassignmentFromRequirement` — structured param, uncaptured).
 - Type-specific **create** flows for Defect / RfC / Risk (each is its own form).
 - **Attachments/documents** (`DROP_DOC_SRV`) and deeper SolDoc (attributes, assigned docs/test cases, structure editing).
