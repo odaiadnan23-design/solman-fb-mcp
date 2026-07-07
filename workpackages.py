@@ -18,7 +18,9 @@ from client import SolmanClient, SolmanError, client_for
 from requirements import CLASSIFICATION, _dash, MAX_TITLE, get_requirement
 
 WP_PROCESS_TYPE = "S1IT"
-_APPROVED_STATUS = "Approved"
+# A requirement can take a WP once Approved or later. Block only pre-approval / terminal states:
+# Draft, To Be Approved, Rejected, Canceled, Postponed.
+_WP_LINK_BLOCKED = {"E0001", "E0009", "E0002", "E0006", "E0008"}
 
 
 def _guid_from_url(url: str) -> str:
@@ -75,11 +77,11 @@ def create_work_package(
 
     req_guid = _dash(requirement_guid)
     if assign:  # fail early if the requirement can't accept a WP
-        status = get_requirement(req_guid).get("Status")
-        if status != _APPROVED_STATUS:
+        req = get_requirement(req_guid)
+        if req.get("StatusId") in _WP_LINK_BLOCKED:
             raise SolmanError(
-                f"Requirement is '{status}', must be 'Approved' before a WP can be linked. "
-                "Run approve_requirement first (submit_for_approval -> approve)."
+                f"Requirement is '{req.get('Status')}' — must be Approved or later to link a WP. "
+                "Run submit_for_approval then approve_requirement."
             )
 
     body: dict[str, Any] = {
@@ -120,10 +122,10 @@ def assign_work_package(requirement_guid: str, work_package_guid: str) -> dict:
     req_guid = _dash(requirement_guid)
     wp_guid = _dash(work_package_guid)
     with SolmanClient(service=config.SVC_BIZ_REQ) as c:
-        status = get_requirement(req_guid).get("Status")
-        if status != _APPROVED_STATUS:
+        req = get_requirement(req_guid)
+        if req.get("StatusId") in _WP_LINK_BLOCKED:
             raise SolmanError(
-                f"Requirement is '{status}', must be 'Approved' to assign a WP. Approve it first."
+                f"Requirement is '{req.get('Status')}' — must be Approved or later to assign a WP."
             )
         c.function("Assign_Existing_Wp", {"WpGuid": wp_guid, "RequirementGuid": req_guid})
     assigned = link_verified(wp_guid, req_guid)
