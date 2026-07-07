@@ -1,4 +1,4 @@
-"""Work Package operations for SolMan Focused Build (PM1).
+"""Work Package operations for SolMan Focused Build.
 
 Flow (verified against the UI):
   1. requirement must be APPROVED (Draft->To Be Approved->Approved) before a WP links to it

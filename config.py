@@ -3,7 +3,7 @@
 All deployment-specific values (host, client, solution/branch/project ids, owner)
 come from environment variables, loaded from a local ``.env`` if present. Nothing
 site-specific is hardcoded here — copy ``.env.example`` to ``.env`` and fill it in.
-Secrets (the session cookie) live OUTSIDE the repo under ``%USERPROFILE%\\.vsp``.
+Secrets (the session cookie) live OUTSIDE the repo under ``%USERPROFILE%\\.solman-mcp``.
 """
 from __future__ import annotations
 
@@ -61,17 +61,17 @@ DEFAULT_PLANNED_PROJECT = _req("SOLMAN_PLANNED_PROJECT")
 DEFAULT_PLANNED_PROJECT_GUID = _req("SOLMAN_PLANNED_PROJECT_GUID")
 
 # Work Package defaults (release/project targeting — site + release specific).
-WP_PROJECT = os.environ.get("SOLMAN_WP_PROJECT", "")                    # e.g. GORE_REL_8.0_9.0_BUILD
+WP_PROJECT = os.environ.get("SOLMAN_WP_PROJECT", "")                    # e.g. MYPROJ_1.0_BUILD
 WP_PROJECT_PHASE = os.environ.get("SOLMAN_WP_PROJECT_PHASE", "")        # project phase GUID
 WP_RELEASE = os.environ.get("SOLMAN_WP_RELEASE", "")                    # RequestedRelease description
 WP_RELEASE_COMPONENT = os.environ.get("SOLMAN_WP_RELEASE_COMPONENT", "")
 WP_RELEASE_NUMBER = os.environ.get("SOLMAN_WP_RELEASE_NUMBER", "")
 WP_DEV_TEAM_BP = os.environ.get("SOLMAN_WP_DEV_TEAM_BP", "")
 
-# --- Local, out-of-repo state (mirrors VSP's ~/.vsp convention) -----------
-VSP_DIR = Path(os.environ.get("VSP_DIR", Path.home() / ".vsp"))
-COOKIE_FILE = Path(os.environ.get("SOLMAN_COOKIE_FILE", VSP_DIR / "cookies-pm1.txt"))
-EDGE_PROFILE = Path(os.environ.get("SOLMAN_EDGE_PROFILE", VSP_DIR / "pm1-edge-profile"))
+# --- Local, out-of-repo state (kept in a dedicated home-dir folder) -------
+STATE_DIR = Path(os.environ.get("SOLMAN_MCP_HOME", Path.home() / ".solman-mcp"))
+COOKIE_FILE = Path(os.environ.get("SOLMAN_COOKIE_FILE", STATE_DIR / "cookies.txt"))
+EDGE_PROFILE = Path(os.environ.get("SOLMAN_EDGE_PROFILE", STATE_DIR / "edge-profile"))
 SESSION_COOKIE_PREFIX = "SAP_SESSIONID_"
 
 # TLS: internal hosts often use a corporate CA absent from Python's trust store.

@@ -56,13 +56,13 @@ def test_classification_map():
 
 def test_load_cookies_parses_and_validates():
     good = ("# Netscape HTTP Cookie File\n"
-            "host\tFALSE\t/\tTRUE\t0\tSAP_SESSIONID_PM1_100\tABC123\n"
+            "host\tFALSE\t/\tTRUE\t0\tSAP_SESSIONID_S01_100\tABC123\n"
             "host\tFALSE\t/\tTRUE\t0\tsap-usercontext\tsap-client=100\n")
     p = Path(tempfile.mktemp())
     p.write_text(good, encoding="utf-8")
     try:
         ck = client.load_cookies(p)
-        assert ck["SAP_SESSIONID_PM1_100"] == "ABC123"
+        assert ck["SAP_SESSIONID_S01_100"] == "ABC123"
         assert ck["sap-usercontext"] == "sap-client=100"
     finally:
         p.unlink()

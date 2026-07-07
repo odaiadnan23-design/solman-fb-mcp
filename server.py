@@ -1,8 +1,8 @@
-"""MCP server for SAP Solution Manager Focused Build — Requirements Management (PM1).
+"""MCP server for SAP Solution Manager Focused Build — Requirements Management.
 
 Cookie-only, stdio. Never opens a browser: it loads the session cookie minted
-out-of-band by pm1_refresh.py. If the session expires, tools return an
-actionable error telling the user to re-run pm1_refresh.py.
+out-of-band by refresh_session.py. If the session expires, tools return an
+actionable error telling the user to re-run refresh_session.py.
 
 Run:  python server.py     (stdio)
 """
@@ -36,7 +36,7 @@ def _wrap(fn, *args, **kwargs) -> str:
 
 @mcp.tool()
 def session_status() -> str:
-    """Check whether the PM1 session is live. If not, run pm1_refresh.py to re-authenticate."""
+    """Check whether the SolMan session is live. If not, run refresh_session.py to re-authenticate."""
     return _wrap(session_status)
 
 
@@ -82,9 +82,9 @@ def create_requirement(
 
     priority: '1' High | '2' Medium | '3' Low. classification: fit|gap|wricef|non-functional.
     Title is truncated to 40 chars. external_reference maps to the ZZFLD00000B custom field.
-    Env fields default to the S4P context if blank; set planned_project + planned_project_guid
-    together to file under a specific project. If element_id is provided, the Solution element
-    is attached after creation.
+    Env fields default to the configured working context if blank; set planned_project +
+    planned_project_guid together to file under a specific project. If element_id is provided,
+    the Solution element is attached after creation.
     """
     return _wrap(
         rq.create_requirement, title, priority, classification, description, remarks,
@@ -194,7 +194,7 @@ def list_branches(solution_id: str) -> str:
 # --- Solution Documentation hierarchy (dedicated tree service) -------------
 @mcp.tool()
 def soldoc_context(branch_id: str = "") -> str:
-    """SolDoc root context for a branch (solution/branch names). Defaults to S4P Design branch."""
+    """SolDoc root context for a branch (solution/branch names). Defaults to the configured default branch."""
     return _wrap(sd.context, branch_id or None)
 
 

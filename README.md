@@ -39,24 +39,24 @@ once and the cookie is reused:
 
 1. **Refresh (out-of-band, occasional):**
    ```powershell
-   ./pm1-refresh.ps1          # opens Edge, completes SSO, saves the cookie
-   # or: python pm1_refresh.py --timeout 300
+   ./refresh-session.ps1      # opens Edge, completes SSO, saves the cookie
+   # or: python refresh_session.py --timeout 300
    ```
-   Writes the SAP session cookie to `%USERPROFILE%\.vsp\cookies-pm1.txt` (never
+   Writes the SAP session cookie to `%USERPROFILE%\.solman-mcp\cookies.txt` (never
    committed). First run may need an interactive login; later runs are silent
    (persistent Edge profile).
 2. **Server (runtime):** loads the cookie, handles the CSRF token, never opens a
-   browser. If the session expires, tools return `SESSION EXPIRED: … run pm1_refresh.py`.
+   browser. If the session expires, tools return `SESSION EXPIRED: … run refresh_session.py`.
 
-> Note: SolMan's ADT node is usually closed on a Focused Build box, so ADT-based
-> tools (e.g. `vsp.exe`) can't be reused for cookie capture — hence the dedicated
-> refresh script that lands on an allowed OData path.
+> Note: ADT-based SSO cookie tools can't be reused here because a Focused Build
+> system usually has its ADT node closed — hence the dedicated refresh script
+> that lands on an allowed OData path.
 
 ## Tools
 
 | Tool | Purpose |
 |------|---------|
-| `session_status()` | Check the session is live (else run pm1_refresh.py) |
+| `session_status()` | Check the session is live (else run refresh_session.py) |
 | `list_process_types()` | List Focused Build object types (Requirement, WP, Defect, RfC, Risk, …) |
 | `search_requirements(query, top)` | Find requirements by title substring |
 | `get_requirement(guid)` | Read a requirement in full |
@@ -105,12 +105,12 @@ once and the cookie is reused:
 
 ## Connectivity
 
-The HTTP client is **reused across calls** (one cookie load + one CSRF token, connection-pooled) and **auto-reloads** when `pm1_refresh.py` rewrites the cookie file (`client_for()` watches the file mtime). `session_status()` gives a cheap liveness check; an expired SAML session is detected (login-HTML response) and reported as `SESSION EXPIRED` rather than crashing. Refresh is still out-of-band (`pm1_refresh.py`). *Future:* a periodic keepalive ping to reduce session expiries.
+The HTTP client is **reused across calls** (one cookie load + one CSRF token, connection-pooled) and **auto-reloads** when `refresh_session.py` rewrites the cookie file (`client_for()` watches the file mtime). `session_status()` gives a cheap liveness check; an expired SAML session is detected (login-HTML response) and reported as `SESSION EXPIRED` rather than crashing. Refresh is still out-of-band (`refresh_session.py`). *Future:* a periodic keepalive ping to reduce session expiries.
 
 ## Files
 
 - `config.py` — env-driven configuration (loads `.env`)
-- `pm1_refresh.py` / `pm1-refresh.ps1` — Playwright SSO cookie minting
+- `refresh_session.py` / `refresh-session.ps1` — Playwright SSO cookie minting
 - `client.py` — cookie-only httpx client (CSRF, get/create/merge/function)
 - `requirements.py` — requirement domain operations
 - `workpackages.py` — Work Package create/assign/withdraw + list work items

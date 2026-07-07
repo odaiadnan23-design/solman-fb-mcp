@@ -1,6 +1,6 @@
-"""Headless HTTP client for PM1 SolMan OData — cookie-only, no browser.
+"""Headless HTTP client for SolMan OData — cookie-only, no browser.
 
-Loads the session cookie minted by ``pm1_refresh.py`` and handles the SAP CSRF
+Loads the session cookie minted by ``refresh_session.py`` and handles the SAP CSRF
 token dance. Targets BUSINESS_REQUIREMENTS_SRV (the purpose-built requirements
 API) by default; can be pointed at any SALM service.
 """
@@ -15,7 +15,7 @@ import config
 
 
 class SessionExpired(RuntimeError):
-    """Cookie missing/expired — user must run pm1_refresh.py."""
+    """Cookie missing/expired — user must run refresh_session.py."""
 
 
 class SolmanError(RuntimeError):
@@ -25,7 +25,7 @@ class SolmanError(RuntimeError):
 def load_cookies(path: Path = config.COOKIE_FILE) -> dict[str, str]:
     """Parse a Netscape cookie file into a name->value dict."""
     if not path.exists():
-        raise SessionExpired(f"No cookie file at {path}. Run: python pm1_refresh.py")
+        raise SessionExpired(f"No cookie file at {path}. Run: python refresh_session.py")
     cookies: dict[str, str] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -35,7 +35,7 @@ def load_cookies(path: Path = config.COOKIE_FILE) -> dict[str, str]:
         if len(parts) >= 7:
             cookies[parts[5]] = parts[6]
     if not any(k.startswith(config.SESSION_COOKIE_PREFIX) for k in cookies):
-        raise SessionExpired(f"No {config.SESSION_COOKIE_PREFIX}* cookie in {path}. Run pm1_refresh.py.")
+        raise SessionExpired(f"No {config.SESSION_COOKIE_PREFIX}* cookie in {path}. Run refresh_session.py.")
     return cookies
 
 
@@ -79,7 +79,8 @@ class SolmanClient:
     def _raise_for_auth(self, r: httpx.Response) -> None:
         if r.status_code in (401, 403) and "require" not in r.headers.get("x-csrf-token", "").lower():
             raise SessionExpired(
-                f"HTTP {r.status_code} from PM1 — session expired/unauthorized. Run: python pm1_refresh.py"
+                f"HTTP {r.status_code} from the SolMan system — session expired/unauthorized. "
+                "Run: python refresh_session.py"
             )
 
     def _ensure_csrf(self) -> str:
@@ -89,7 +90,7 @@ class SolmanClient:
         token = r.headers.get("x-csrf-token")
         if not token:
             self._raise_for_auth(r)
-            raise SessionExpired("CSRF fetch returned no token — session likely expired. Run pm1_refresh.py.")
+            raise SessionExpired("CSRF fetch returned no token — session likely expired. Run refresh_session.py.")
         self._csrf = token
         return token
 
@@ -98,7 +99,7 @@ class SolmanClient:
         """An expired SAML/IAS session returns the login HTML (200), not JSON."""
         if "text/html" in r.headers.get("content-type", "").lower():
             raise SessionExpired(
-                "PM1 session expired (SAML login page returned). Run: python pm1_refresh.py"
+                "SolMan session expired (SAML login page returned). Run: python refresh_session.py"
             )
 
     def get(self, path: str, params: dict | None = None) -> dict:
@@ -180,7 +181,7 @@ def client_for(service: str = config.SVC_BIZ_REQ) -> "SolmanClient":
     """Return a cached client for a service, rebuilt if the cookie file changed on disk.
 
     Reuses the httpx connection pool and CSRF token across calls; picks up a fresh
-    session automatically after pm1_refresh.py rewrites the cookie file.
+    session automatically after refresh_session.py rewrites the cookie file.
     """
     mtime = _cookie_mtime()
     cached = _CLIENTS.get(service)

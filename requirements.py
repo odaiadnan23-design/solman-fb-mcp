@@ -1,4 +1,4 @@
-"""Domain operations for SolMan Focused Build requirements (PM1).
+"""Domain operations for SolMan Focused Build requirements.
 
 All logic is grounded in live-captured/verified API behavior against
 BUSINESS_REQUIREMENTS_SRV (create/read/update) and CRM_GENERIC_SRV (search).
@@ -135,7 +135,7 @@ def create_requirement(
     """Create a requirement. Returns {RequirementId, RequirementGuid, ...}.
 
     `priority`: '1'|'2'|'3'. `classification`: fit|gap|wricef|non-functional.
-    Env-specific fields default to the S4P working context (see DEFAULTS).
+    Env-specific fields default to the configured working context (see DEFAULTS).
     If `element_id` is given, the Solution element is attached after create.
     """
     if not title:

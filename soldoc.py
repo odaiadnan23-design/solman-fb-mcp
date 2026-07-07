@@ -1,4 +1,4 @@
-"""Solution Documentation hierarchy navigation (PM1).
+"""Solution Documentation hierarchy navigation.
 
 Uses the dedicated **soldoc_node_selection_srv** service — a real tree API with
 parent/child links (ParentElementId, HasChilds, Level), unlike the flat capped
