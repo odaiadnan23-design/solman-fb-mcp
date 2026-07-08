@@ -131,12 +131,15 @@ def create_requirement(
     value: int = 0,
     effort: int = 0,
     element_id: str = "",
+    scope_id: str = "SAP_DEFAULT_SCOPE",
 ) -> dict:
     """Create a requirement. Returns {RequirementId, RequirementGuid, ...}.
 
     `priority`: '1'|'2'|'3'. `classification`: fit|gap|wricef|non-functional.
     Env-specific fields default to the configured working context (see DEFAULTS).
-    If `element_id` is given, the Solution element is attached after create.
+    If `element_id` is given, the Solution element is attached after create under
+    `scope_id` — pass the target release/wave scope (from `list_scopes`) so the link
+    lands in that scope, not the `SAP_DEFAULT_SCOPE` catch-all.
     """
     if not title:
         raise ValueError("title is required")
@@ -180,7 +183,7 @@ def create_requirement(
             )
         result = {k: created.get(k) for k in ("RequirementId", "RequirementGuid", "RequirementTitle", "Status")}
         if element_id:
-            result["element_attached"] = _assign_element(c, guid, element_id, body["BranchId"])
+            result["element_attached"] = _assign_element(c, guid, element_id, body["BranchId"], scope_id)
     return result
 
 

@@ -77,6 +77,7 @@ def create_requirement(
     value: int = 0,
     effort: int = 0,
     element_id: str = "",
+    scope_id: str = "SAP_DEFAULT_SCOPE",
 ) -> str:
     """Create a Focused Build requirement (ProcessType S1BR).
 
@@ -84,13 +85,15 @@ def create_requirement(
     Title is truncated to 40 chars. external_reference maps to the ZZFLD00000B custom field.
     Env fields default to the configured working context if blank; set planned_project +
     planned_project_guid together to file under a specific project. If element_id is provided,
-    the Solution element is attached after creation.
+    the Solution element is attached after creation under scope_id — pass the target
+    release/wave scope (from soldoc_list_scopes) so the link is filed in that scope rather
+    than the SAP_DEFAULT_SCOPE catch-all.
     """
     return _wrap(
         rq.create_requirement, title, priority, classification, description, remarks,
         suggested_solution, external_reference, category_id, owner_bp, owner_name,
         solution_id or None, branch_id or None, planned_project or None,
-        planned_project_guid or None, value, effort, element_id,
+        planned_project_guid or None, value, effort, element_id, scope_id,
     )
 
 
