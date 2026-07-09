@@ -137,17 +137,45 @@ def assign_work_package(requirement_guid: str, work_package_guid: str) -> dict:
 
 _WI_TYPES = {"nc": "S1MJ", "gc": "S1CG", "S1MJ": "S1MJ", "S1CG": "S1CG"}
 
+_WP_SCOPING_ACTION = "S1ITR_HANDOVER_TO_SCOPING"     # "Define Scope"
+_WP_PRE_SCOPING_STATUS = "E0001"                     # freshly created WP
+
+
+def list_scope_components(work_package_guid: str, wp_type: str = "nc",
+                          current_systems_only: bool = True) -> list[dict]:
+    """Valid technical components (ConfigItem value help) for Work Items under a WP.
+
+    NOTE: the value help returns EMPTY unless filtered by ProcessType and
+    SystemSwitch — exactly the filters the UI sends.
+    """
+    wtype = _WI_TYPES.get(wp_type, wp_type.upper())
+    wpg = _dash(work_package_guid)
+    sw = "true" if current_systems_only else "false"
+    rows = client_for(config.SVC_GENERIC).results(
+        f"BTSCOPESET(WpGuid='{wpg}',WpItemGuid='')/SCOPE_COMPONENTSet",
+        {"$filter": f"ProcessType eq '{wtype}' and SystemSwitch eq {sw}", "$top": "100"})
+    return [{"config_item": r.get("ConfigItem"), "ibase_instance": r.get("IbaseInstance"),
+             "system_id": r.get("SystemId"), "description": r.get("CmpDesc")}
+            for r in rows]
+
 
 def create_work_item(work_package_guid: str, description: str, wricef: str = "non-functional",
                      text: str = "", config_item: str = "", wp_type: str = "nc",
                      sprint: str = "", priority: str = "4", ibase_instance: str = "",
-                     cmp_desc: str = "", wp_system: str = "", proc_type_desc: str = "") -> dict:
-    """Create a Work Item (scope item) under a Work Package.
+                     cmp_desc: str = "", wp_system: str = "", proc_type_desc: str = "",
+                     auto_scope: bool = True) -> dict:
+    """Create a Work Item (scope item) under a Work Package — verified to persist.
 
-    Two-step (mirrors the UI): add an empty BTSCOPE row (returns WpItemGuid), then POST the
-    filled row. wricef: fit|gap|wricef|non-functional. wp_type: nc (S1MJ) | gc (S1CG).
-    A Work Item references a technical component — pass config_item (+ ibase_instance/cmp_desc/
-    wp_system/proc_type_desc) from the WP's SCOPE_COMPONENT value help for it to persist.
+    Three ingredients make the row COMMIT (a plain POST 201s but silently never
+    saves — reverse-engineered from the shipped UI):
+      1. the WP must be in Scoping or later — freshly-created WPs get the
+         "Define Scope" PPF action executed first (when `auto_scope`);
+      2. `config_item` must be VALID for this WP/type (see list_scope_components;
+         an invalid one is dropped without error). Omitted -> first valid picked;
+      3. the fill is a DEEP create to top-level BTSCOPESET including an (empty)
+         `BTSCOPE_PARTNERSSet` — the deep-create signature triggers the one-order save.
+
+    wricef: fit|gap|wricef|non-functional. wp_type: nc (S1MJ) | gc (S1CG).
     """
     if not description:
         raise ValueError("description is required")
@@ -156,10 +184,32 @@ def create_work_item(work_package_guid: str, description: str, wricef: str = "no
         raise ValueError(f"wricef must be one of {list(CLASSIFICATION)}")
     wtype = _WI_TYPES.get(wp_type, wp_type.upper())
     wpg = _dash(work_package_guid)
-    nav = f"WORKSPACESET(Guid=guid'{_redash(wpg)}',ProcessType='{WP_PROCESS_TYPE}')/BTSCOPESet"
     c = client_for(config.SVC_GENERIC)
+    ws_key = f"WORKSPACESET(Guid=guid'{_redash(wpg)}',ProcessType='{WP_PROCESS_TYPE}')"
 
-    added = c.create(nav, {  # step 1: empty scope row (mirror the UI's template)
+    # 1) ensure the WP is in a scope-editable status
+    hdr = c.get(ws_key).get("d", {})
+    moved = False
+    if hdr.get("Status") == _WP_PRE_SCOPING_STATUS:
+        if not auto_scope:
+            raise SolmanError("WP is freshly created — run the 'Define Scope' action "
+                              f"({_WP_SCOPING_ACTION}) first, or pass auto_scope=True.")
+        c.function("PPF_ACTION", {"ActionDesc": "", "ActionId": _WP_SCOPING_ACTION, "WsGuid": wpg})
+        moved = True
+
+    # 2) a VALID component is mandatory for the save to stick
+    if not config_item:
+        comps = list_scope_components(wpg, wtype)
+        if not comps:
+            raise SolmanError("No valid scope components for this WP/type — cannot create a "
+                              "Work Item (check the WP's system landscape assignment).")
+        pick = comps[0]
+        config_item, ibase_instance = pick["config_item"], pick["ibase_instance"]
+        wp_system = wp_system or pick["system_id"]
+        cmp_desc = cmp_desc or (pick["description"] or "")
+
+    # 3) add empty row -> deep fill incl. partners array (the save trigger)
+    added = c.create(f"{ws_key}/BTSCOPESet", {
         "WpGuid": "", "WpType": "", "WpDescription": "", "WpSystem": "", "WpScope": "",
         "WpStatus": "", "WpItemGuid": "", "ProcTypeDesc": "", "Sprint": "", "Wricef": "",
         "IbaseInstance": "", "Text": "", "Changeable": True, "Url": "", "WricefKey": "",
@@ -168,24 +218,24 @@ def create_work_item(work_package_guid: str, description: str, wricef: str = "no
     if not item_guid:
         raise SolmanError("Work Item add returned no WpItemGuid (could not create the scope row).")
 
-    body = {  # step 2: fill the row
+    c.create("BTSCOPESET", {
         "WpGuid": wpg, "WpItemGuid": item_guid, "WpType": wtype,
         "WpDescription": description[:MAX_TITLE], "Wricef": cls[0], "WricefKey": cls[0],
         "Text": text, "PriorityId": priority, "Changeable": True,
         "ValuePoints": 0, "StoryPoints": 0,
         "ConfigItem": config_item, "IbaseInstance": ibase_instance, "CmpDesc": cmp_desc,
         "WpSystem": wp_system, "ProcTypeDesc": proc_type_desc, "Sprint": sprint,
-        "WpScope": "", "WpStatus": "", "Url": "", "ZZFLD00000B": "", "ZFC_ZFLD00000B": 0}
-    c.create("BTSCOPESET", body)
+        "WpScope": "", "WpStatus": "", "Url": "", "ZZFLD00000B": "", "ZFC_ZFLD00000B": 0,
+        "BTSCOPE_PARTNERSSet": []})
 
-    if not any(i.get("item_guid") == item_guid for i in list_work_items(work_package_guid)):
-        raise SolmanError(
-            "Work Item did not persist. BTSCOPE scope items live inside the WP's stateful CRM "
-            "one-order document: POST BTSCOPESET returns a transient row that needs a separate "
-            "commit/save (not yet reproduced headlessly). Create Work Items in the UI for now. "
-            "list_work_items() reads them fine.")
+    match = [i for i in list_work_items(wpg) if i.get("item_guid") == item_guid]
+    if not match:
+        raise SolmanError("Work Item did not persist despite the deep-create flow — "
+                          "verify config_item is in list_scope_components for this WP.")
     return {"work_package_guid": wpg, "work_item_guid": item_guid, "type": wtype,
-            "description": description[:MAX_TITLE], "created": True}
+            "description": description[:MAX_TITLE], "status": match[0].get("status"),
+            "config_item": config_item, "system": wp_system,
+            "wp_moved_to_scoping": moved, "created": True}
 
 
 def list_work_items(work_package_guid: str) -> list[dict]:

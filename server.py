@@ -377,6 +377,32 @@ def withdraw_work_package(work_package_guid: str) -> str:
 
 
 @mcp.tool()
+def create_work_item(work_package_guid: str, description: str, wricef: str = "non-functional",
+                     text: str = "", config_item: str = "", wp_type: str = "nc",
+                     sprint: str = "", priority: str = "4", auto_scope: bool = True) -> str:
+    """Create a Work Item (scope item) under a Work Package — persists (verified live).
+
+    Handles the three commit requirements automatically: moves a fresh WP into Scoping
+    (auto_scope), picks a valid technical component if config_item is omitted (see
+    list_scope_components), and uses the deep-create that triggers the one-order save.
+    wricef: fit|gap|wricef|non-functional. wp_type: nc (Normal Change S1MJ) | gc (General
+    Change S1CG). Self-verified against list_work_items.
+    """
+    return _wrap(wp.create_work_item, work_package_guid, description, wricef, text,
+                 config_item, wp_type, sprint, priority, auto_scope=auto_scope)
+
+
+@mcp.tool()
+def list_scope_components(work_package_guid: str, wp_type: str = "nc",
+                          current_systems_only: bool = True) -> str:
+    """List the valid technical components (ConfigItem value help) for Work Items under a WP.
+
+    Empty result usually means the WP lacks a system landscape assignment. Pass a
+    config_item from here to create_work_item (or let it auto-pick the first)."""
+    return _wrap(wp.list_scope_components, work_package_guid, wp_type, current_systems_only)
+
+
+@mcp.tool()
 def list_work_items(work_package_guid: str) -> str:
     """List the Work Items (scope items) under a Work Package."""
     return _wrap(wp.list_work_items, work_package_guid)
