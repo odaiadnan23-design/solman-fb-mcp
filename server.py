@@ -70,6 +70,48 @@ def get_requirement(guid: str) -> str:
 
 
 @mcp.tool()
+def list_requirements(solution: str = "", branch_id: str = "", status: str = "",
+                      priority: str = "", owner: str = "", project: str = "",
+                      query: str = "", top: int = 25, scan: int = 200) -> str:
+    """List/filter requirements NEWEST FIRST, with FLP deep links, using trustworthy
+    filter semantics (this gateway silently ignores most $filter fields — worked around).
+
+    query = title substring (server-side). status ('Approved' or 'E0003') and solution/
+    branch are client-side. owner/project/priority hydrate each candidate row (slower;
+    scan caps the candidates considered). solution accepts a name/id ("P1M").
+    """
+    return _wrap(rq.list_requirements, solution, branch_id, status, priority,
+                 owner, project, query, top, scan)
+
+
+@mcp.tool()
+def create_requirements_batch(items: list[dict], solution: str = "",
+                              scope_id: str = "SAP_DEFAULT_SCOPE",
+                              planned_project: str = "", planned_project_guid: str = "",
+                              classification: str = "fit", priority: str = "2") -> str:
+    """Create several requirements in one call; continues on per-row errors.
+
+    items: [{title, description?, element_id?, external_reference?, classification?,
+    priority?}, ...]. Shared solution/scope (names OK, resolved once) and project apply
+    to all rows. Returns per-row id/guid/url or error. ALWAYS pass scope_id when
+    attaching elements so links land in the right release scope.
+    """
+    return _wrap(rq.create_requirements_batch, items, solution, scope_id,
+                 planned_project, planned_project_guid, classification, priority)
+
+
+@mcp.tool()
+def set_element_scope(requirement_guid: str, element_id: str, scope: str,
+                      solution: str = "", branch_id: str = "") -> str:
+    """Re-file an ALREADY-ATTACHED element link under a different scope (updates in place).
+
+    scope accepts a name ("Release 5") or id; solution a name/id. Use when a link
+    landed in SAP_DEFAULT_SCOPE by mistake."""
+    return _wrap(rq.attach_element, requirement_guid, element_id, branch_id or None,
+                 scope, solution)
+
+
+@mcp.tool()
 def create_requirement(
     title: str,
     priority: str = "2",

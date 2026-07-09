@@ -62,12 +62,83 @@ def search_requirements(query: str = "", top: int = 25) -> list[dict]:
              "status": r.get("Status"), "branch": r.get("BrancheId")} for r in rows]
 
 
+def flp_url(guid: str) -> str:
+    """FLP deep link to open a requirement in the Requirements Management app."""
+    g = _dash(guid)
+    return (f"{config.BASE_URL}/sap/bc/ui2/flp?sap-client={config.SAP_CLIENT}"
+            f"&sap-language=EN#Action-requirementApp&/object/{g},NULL")
+
+
 def get_requirement(guid: str) -> dict:
     """Read a requirement (full) by GUID (dashed or plain)."""
     key = f"REQUIREMENTSet(WpGuid='',RequirementGuid='{_dash(guid)}')"
     with SolmanClient(service=config.SVC_BIZ_REQ) as c:
         d = c.get(key).get("d", {})
-    return {k: v for k, v in d.items() if not (isinstance(v, dict) and "__deferred" in v)}
+    out = {k: v for k, v in d.items() if not (isinstance(v, dict) and "__deferred" in v)}
+    out["url"] = flp_url(guid)
+    return out
+
+
+# QUERY-SEMANTICS WARNING (verified live): this gateway SILENTLY IGNORES most
+# $filter fields, or-chains keep only the LAST predicate, $orderby 500s, and on
+# a BranchId-filtered REQUIREMENTSet even $skip lies (every page returns the
+# same window). The only trustworthy enumeration is CRM_GENERIC WORKSPACESET,
+# which honors ProcessType + substringof(Description) and returns NEWEST FIRST.
+def list_requirements(solution: str = "", branch_id: str = "", status: str = "",
+                      priority: str = "", owner: str = "", project: str = "",
+                      query: str = "", top: int = 25, scan: int = 200) -> list[dict]:
+    """List/filter requirements, newest first, with FLP deep links.
+
+    `query` (title substring) is applied server-side; `status` ('Approved' or
+    'E0003') and branch are filtered client-side from the search rows; `owner`
+    / `project` / `priority` require hydrating each candidate (extra read per
+    row, capped by `scan`). solution accepts a name/id ("P1M").
+    """
+    if solution and not branch_id:
+        import solutions as _sol
+        branch_id = _sol.resolve_context(solution)["branch_id"]
+
+    status_id = ""
+    if status:
+        statuses = lookup("statuses")
+        by_id = {s["StatusId"]: s["StatusId"] for s in statuses}
+        by_name = {(s["StatusName"] or "").lower(): s["StatusId"] for s in statuses}
+        status_id = by_id.get(status.upper()) or by_name.get(status.lower())
+        if not status_id:
+            raise ValueError(f"unknown status {status!r}; use an id (E0003) or name (Approved)")
+
+    flt = f"ProcessType eq '{REQUIREMENT_PROCESS_TYPE}'"
+    if query:
+        flt += f" and substringof('{odata_literal(query)}',Description)"
+    rows = client_for(config.SVC_GENERIC).results(
+        "WORKSPACESET", {"$filter": flt, "$top": str(scan)})
+
+    need_hydrate = bool(owner or project or priority)
+    ol, pl = owner.lower(), project.lower()
+    out = []
+    for r in rows:
+        if status_id and r.get("Status") != status_id:
+            continue
+        if branch_id and r.get("BrancheId") and r.get("BrancheId") != branch_id:
+            continue
+        item = {"id": r.get("ObjectId"), "guid": _dash(r.get("Guid", "")),
+                "title": r.get("Description"), "status_id": r.get("Status"),
+                "url": flp_url(r.get("Guid", ""))}
+        if need_hydrate:
+            full = get_requirement(item["guid"])
+            if ol and ol not in (full.get("OwnerName") or "").lower():
+                continue
+            if pl and pl not in (full.get("PlannedProject") or "").lower():
+                continue
+            if priority and full.get("PriorityId") != priority:
+                continue
+            item.update({"status": full.get("Status"), "owner": full.get("OwnerName"),
+                         "project": full.get("PlannedProject"),
+                         "priority": full.get("PriorityName")})
+        out.append(item)
+        if len(out) >= top:
+            break
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -206,6 +277,56 @@ def create_requirement(
         if element_id:
             result["element_attached"] = _assign_element(c, guid, element_id, body["BranchId"], scope_id)
     return result
+
+
+def create_requirements_batch(items: list[dict], solution: str = "",
+                              scope_id: str = "SAP_DEFAULT_SCOPE",
+                              planned_project: str = "", planned_project_guid: str = "",
+                              classification: str = "fit", priority: str = "2",
+                              category_id: str = "", owner_bp: str = "",
+                              owner_name: str = "") -> dict:
+    """Create several requirements in one call (continues on per-row errors).
+
+    Each item: {title, description?, element_id?, external_reference?,
+    classification?, priority?, remarks?, suggested_solution?}. Shared context
+    (solution/scope/project/etc.) applies to every row; per-item values win.
+    Solution/scope names are resolved ONCE up front.
+    """
+    if not items:
+        raise ValueError("items is empty")
+    branch_id = ""
+    if solution or (scope_id and scope_id != "SAP_DEFAULT_SCOPE"):
+        import solutions as _sol
+        ctx = _sol.resolve_context(solution, "", scope_id or "")
+        branch_id, scope_id = ctx["branch_id"], ctx["scope_id"]
+
+    results, ok = [], 0
+    for it in items:
+        title = (it.get("title") or "")[:MAX_TITLE]
+        try:
+            r = create_requirement(
+                title=title,
+                priority=it.get("priority", priority),
+                classification=it.get("classification", classification),
+                description=it.get("description", ""),
+                remarks=it.get("remarks", ""),
+                suggested_solution=it.get("suggested_solution", ""),
+                external_reference=it.get("external_reference", ""),
+                category_id=category_id, owner_bp=owner_bp, owner_name=owner_name,
+                branch_id=branch_id or None,
+                planned_project=planned_project or None,
+                planned_project_guid=planned_project_guid or None,
+                element_id=it.get("element_id", ""),
+                scope_id=scope_id, solution=solution,
+            )
+            ok += 1
+            results.append({"title": title, "id": r.get("RequirementId"),
+                            "guid": r.get("RequirementGuid"),
+                            "element_attached": r.get("element_attached"),
+                            "url": flp_url(r.get("RequirementGuid", ""))})
+        except Exception as e:  # noqa: BLE001 — batch must continue on row errors
+            results.append({"title": title, "error": f"{type(e).__name__}: {e}"})
+    return {"created": ok, "failed": len(items) - ok, "results": results}
 
 
 def _assign_element(c: SolmanClient, guid: str, element_id: str, branch_id: str,
