@@ -109,6 +109,49 @@ def test_update_requirement_rejects_unknown_field():
         pass
 
 
+def test_retry_io_recovers_from_transient_faults():
+    import httpx
+    calls = {"n": 0}
+    saved = client._RETRY_BASE_DELAY
+    client._RETRY_BASE_DELAY = 0.01
+    try:
+        def flaky():
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise httpx.ConnectError("transient")
+            return "ok"
+        assert client._retry_io(flaky, client._RETRIABLE_READ) == "ok"
+        assert calls["n"] == 3
+    finally:
+        client._RETRY_BASE_DELAY = saved
+
+
+def test_retry_io_write_does_not_retry_protocol_errors():
+    import httpx
+    calls = {"n": 0}
+    def protofail():
+        calls["n"] += 1
+        raise httpx.RemoteProtocolError("may have been sent")
+    try:
+        client._retry_io(protofail, client._RETRIABLE_WRITE)
+        assert False, "expected RemoteProtocolError"
+    except httpx.RemoteProtocolError:
+        assert calls["n"] == 1  # a write must NOT be re-sent on ambiguous faults
+
+
+def test_results_all_pages_and_caps():
+    class Fake:
+        def __init__(self, total): self.total = total
+        def results(self, path, params):
+            top, skip = int(params["$top"]), int(params["$skip"])
+            return [{"i": n} for n in range(skip, min(skip + top, self.total))]
+    Fake.results_all = client.SolmanClient.results_all
+    f = Fake(237)
+    rows = f.results_all("X", page_size=100)
+    assert len(rows) == 237 and rows[-1]["i"] == 236
+    assert len(f.results_all("X", page_size=100, max_rows=150)) == 150
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     passed = 0

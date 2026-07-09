@@ -7,11 +7,38 @@ API) by default; can be pointed at any SALM service.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
+from typing import Callable, TypeVar
 
 import httpx
 
 import config
+
+T = TypeVar("T")
+
+# Transient network faults worth retrying. GETs are idempotent -> retry broadly
+# (dead pooled connections after a server-side keepalive close raise
+# RemoteProtocolError/ReadError on reuse; a VPN flap raises ConnectError).
+# Writes retry ONLY on ConnectError (the request never left the machine).
+_RETRIABLE_READ = (httpx.ConnectError, httpx.RemoteProtocolError, httpx.ReadError, httpx.ReadTimeout)
+_RETRIABLE_WRITE = (httpx.ConnectError,)
+_RETRY_TRIES = 3
+_RETRY_BASE_DELAY = 1.0  # seconds; doubles per attempt
+
+
+def _retry_io(call: Callable[[], T], retriable: tuple[type[BaseException], ...]) -> T:
+    """Run call() with exponential backoff on the given transient exceptions."""
+    delay = _RETRY_BASE_DELAY
+    for attempt in range(_RETRY_TRIES):
+        try:
+            return call()
+        except retriable:
+            if attempt == _RETRY_TRIES - 1:
+                raise
+            time.sleep(delay)
+            delay *= 2
+    raise AssertionError("unreachable")
 
 
 class SessionExpired(RuntimeError):
@@ -86,7 +113,8 @@ class SolmanClient:
     def _ensure_csrf(self) -> str:
         if self._csrf:
             return self._csrf
-        r = self._http.get(f"{self.service}/", headers={"X-CSRF-Token": "Fetch"})
+        r = _retry_io(lambda: self._http.get(f"{self.service}/", headers={"X-CSRF-Token": "Fetch"}),
+                      _RETRIABLE_READ)
         token = r.headers.get("x-csrf-token")
         if not token:
             self._raise_for_auth(r)
@@ -104,7 +132,11 @@ class SolmanClient:
 
     def get(self, path: str, params: dict | None = None) -> dict:
         p = {"$format": "json", **(params or {})}
-        r = self._http.get(f"{self.service}/{path}", params=p, headers={"Accept": "application/json"})
+        r = _retry_io(
+            lambda: self._http.get(f"{self.service}/{path}", params=p,
+                                   headers={"Accept": "application/json"}),
+            _RETRIABLE_READ,
+        )
         self._raise_for_auth(r)
         self._check_session(r)
         if r.status_code >= 400:
@@ -116,14 +148,33 @@ class SolmanClient:
         rows = d.get("results", d) if isinstance(d, dict) else d
         return rows if isinstance(rows, list) else [rows]
 
+    def results_all(self, path: str, params: dict | None = None,
+                    page_size: int = 100, max_rows: int = 2000) -> list[dict]:
+        """Page through an entity set (the gateway caps pages at ~100 rows).
+
+        Each page GET carries its own transient-fault retry. Stops on a short
+        page or at max_rows (a deliberate ceiling — deep $skip gets slow on
+        SolMan gateways; raise it consciously for genuinely large reads).
+        """
+        rows: list[dict] = []
+        skip = 0
+        while len(rows) < max_rows:
+            page = self.results(path, {**(params or {}),
+                                       "$top": str(page_size), "$skip": str(skip)})
+            rows.extend(page)
+            if len(page) < page_size:
+                break
+            skip += page_size
+        return rows[:max_rows]
+
     # -- writes ------------------------------------------------------------
     def create(self, entityset: str, body: dict) -> dict:
         token = self._ensure_csrf()
-        r = self._retry_csrf(lambda t: self._http.post(
+        r = self._retry_csrf(lambda t: _retry_io(lambda: self._http.post(
             f"{self.service}/{entityset}",
             headers={"X-CSRF-Token": t, "Content-Type": "application/json", "Accept": "application/json"},
             content=json.dumps(body).encode("utf-8"),
-        ), token)
+        ), _RETRIABLE_WRITE), token)
         self._raise_for_auth(r)
         if r.status_code not in (200, 201):
             raise SolmanError(f"CREATE {entityset} -> {r.status_code}: {_sap_error_message(r)}")
@@ -131,11 +182,11 @@ class SolmanClient:
 
     def merge(self, key_path: str, body: dict) -> None:
         token = self._ensure_csrf()
-        r = self._retry_csrf(lambda t: self._http.request(
+        r = self._retry_csrf(lambda t: _retry_io(lambda: self._http.request(
             "MERGE", f"{self.service}/{key_path}",
             headers={"X-CSRF-Token": t, "Content-Type": "application/json", "Accept": "application/json"},
             content=json.dumps(body).encode("utf-8"),
-        ), token)
+        ), _RETRIABLE_WRITE), token)
         self._raise_for_auth(r)
         if r.status_code not in (200, 204):
             raise SolmanError(f"MERGE {key_path} -> {r.status_code}: {_sap_error_message(r)}")
@@ -150,8 +201,9 @@ class SolmanClient:
         q: dict = {"$format": "json"}
         for k, v in (str_params or {}).items():
             q[k] = f"'{v}'" if isinstance(v, str) else v
-        r = self._retry_csrf(lambda t: self._http.get(
-            f"{self.service}/{name}", params=q, headers={"X-CSRF-Token": t, "Accept": "application/json"}), token)
+        r = self._retry_csrf(lambda t: _retry_io(lambda: self._http.get(
+            f"{self.service}/{name}", params=q,
+            headers={"X-CSRF-Token": t, "Accept": "application/json"}), _RETRIABLE_WRITE), token)
         self._raise_for_auth(r)
         if r.status_code >= 400:
             raise SolmanError(f"FUNCTION {name} -> {r.status_code}: {_sap_error_message(r)}")
