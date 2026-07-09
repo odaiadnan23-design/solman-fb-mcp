@@ -12,6 +12,7 @@ import json
 
 from mcp.server.fastmcp import FastMCP
 
+import attachments as att
 import config
 import requirements as rq
 import soldoc as sd
@@ -261,6 +262,43 @@ def soldoc_browse(parent_element_id: str = "", branch_id: str = "",
 def soldoc_get_element(element_id: str, branch_id: str = "", solution: str = "") -> str:
     """Read a single SolDoc tree node (incl. full path) by element id. solution accepts a name/id."""
     return _wrap(lambda: sd.get_element(element_id, _branch_for(solution, branch_id)))
+
+
+# --- Attachments (files + URL links; works on requirements, WPs, WIs) -------
+@mcp.tool()
+def list_attachments(guid: str, branch_id: str = "", solution: str = "") -> str:
+    """List attachments (files + URL links) on a requirement/Work Package/Work Item by guid."""
+    return _wrap(att.list_attachments, guid, branch_id, solution)
+
+
+@mcp.tool()
+def upload_attachment(guid: str, file_path: str = "", filename: str = "",
+                      content_b64: str = "", mime_type: str = "",
+                      branch_id: str = "", solution: str = "") -> str:
+    """Attach a file to a requirement/WP/WI. Pass file_path (local file), OR filename +
+    content_b64 for in-memory content. Upload is verified against the attachment list."""
+    return _wrap(att.upload_attachment, guid, file_path, filename, content_b64,
+                 mime_type, branch_id, solution)
+
+
+@mcp.tool()
+def attach_url(guid: str, url: str, title: str = "",
+               branch_id: str = "", solution: str = "") -> str:
+    """Attach a URL link to a requirement/WP/WI (appears as '<title>.URL' in its attachments)."""
+    return _wrap(att.attach_url, guid, url, title, branch_id, solution)
+
+
+@mcp.tool()
+def download_attachment(guid: str, doc_id: str, save_to: str = "",
+                        branch_id: str = "", solution: str = "") -> str:
+    """Download an attachment (doc_id from list_attachments). Saves to save_to, else returns base64."""
+    return _wrap(att.download_attachment, guid, doc_id, save_to, branch_id, solution)
+
+
+@mcp.tool()
+def delete_attachment(guid: str, doc_id: str, branch_id: str = "", solution: str = "") -> str:
+    """Delete an attachment (file or URL link) from a requirement/WP/WI, verified."""
+    return _wrap(att.delete_attachment, guid, doc_id, branch_id, solution)
 
 
 # --- Work Packages ---------------------------------------------------------
