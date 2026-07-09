@@ -1,9 +1,12 @@
 # solman-fb-mcp — SAP SolMan Focused Build Requirements MCP server
 
-An MCP server that lets an AI assistant (Claude, etc.) **create and manage Solution
-Manager Focused Build Requirements** — and navigate the Solution Documentation
-process hierarchy — directly over the SAP OData API, instead of driving the Fiori
-UI through browser automation.
+An MCP server that lets an AI assistant (Claude, etc.) operate **SAP Solution
+Manager Focused Build** directly over the OData API — no browser automation.
+It covers the full **Requirement → Work Package → Work Item** chain (create,
+link, lifecycle, all persisting), **attachments** (files + URL links on any
+object), **multi-solution** SolDoc navigation with name-based solution/branch/
+scope resolution, trustworthy search on a gateway that silently ignores most
+filters, and generic read+lifecycle for every Focused Build object type.
 
 Point it at your own SolMan Focused Build system via `.env`. It is **cookie-only at
 runtime** (never opens a browser); an out-of-band refresh script mints the session
@@ -52,56 +55,96 @@ once and the cookie is reused:
 > system usually has its ADT node closed — hence the dedicated refresh script
 > that lands on an allowed OData path.
 
-## Tools
+## Tools (42)
 
 | Tool | Purpose |
 |------|---------|
+| **Session & discovery** | |
 | `session_status()` | Check the session is live (else run refresh_session.py) |
 | `list_process_types()` | List Focused Build object types (Requirement, WP, Defect, RfC, Risk, …) |
-| `search_requirements(query, top)` | Find requirements by title substring |
-| `get_requirement(guid)` | Read a requirement in full |
-| `create_requirement(title, priority, classification, …)` | Create a requirement. Title truncated to 40; `external_reference` → the ZZFLD00000B custom field. Optional `element_id` attaches a Solution element. |
-| `update_requirement(guid, …)` | MERGE-update editable fields |
-| `list_requirement_actions(guid)` | List available lifecycle actions |
-| `withdraw_requirement(guid)` | Withdraw/cancel a Draft/To-Be-Approved requirement (PPF action) |
-| `submit_requirement_for_approval(guid)` | Draft → To Be Approved |
-| `approve_requirement(guid)` | To Be Approved → Approved (required before a WP can be linked) |
-| `reject_requirement(guid)` | To Be Approved → Rejected |
-| `execute_requirement_action(guid, action_id)` | Run any lifecycle action |
-| `search_solution_elements(query, branch_id)` | Flat search of SolDoc elements by name |
-| `attach_element(requirement_guid, element_id, …)` | Attach a SolDoc element to a requirement |
-| `list_requirement_elements(requirement_guid)` | List the SolDoc elements attached to a requirement |
-| `detach_element(requirement_guid, element_id, …)` | Detach a SolDoc element from a requirement |
+| `resolve_context(solution, branch, scope)` | Resolve solution/branch/scope **names** ("Release 5") to ids in one call |
+| `solution_overview(solution)` | A solution's branches, each with all scopes — one-call orientation |
 | `list_lookup(kind)` | Reference values: solutions/priorities/classifications/categories/statuses/projects |
 | `list_branches(solution_id)` | Branches for a solution |
-| `soldoc_context(branch_id)` | SolDoc root context (solution/branch names) |
-| `soldoc_list_scopes(branch_id)` | Scopes/views for a branch (Show All, team/release scopes) |
-| `soldoc_browse(parent_element_id, branch_id, scope)` | Navigate the process-structure tree — empty parent = roots, else children. Drill via `element_id` where `has_children`. |
-| `soldoc_get_element(element_id, branch_id)` | Resolve one element (type + full path) by id |
-| `create_work_package(requirement_guid, title, …)` | Create a Work Package (ProcessType S1IT) and link it to its (Approved) requirement |
-| `assign_work_package(requirement_guid, work_package_guid)` | Link an existing WP to an Approved requirement (self-verified) |
-| `withdraw_work_package(work_package_guid)` | Withdraw a WP (rejects its scope) |
-| `list_work_items(work_package_guid)` | List the Work Items (scope items) under a WP |
+| **Requirements** | |
+| `search_requirements(query, top)` | Find requirements by title substring |
+| `list_requirements(solution, status, owner, project, query, …)` | Filtered listing, newest first, FLP deep links (see query-semantics note) |
+| `get_requirement(guid)` | Read a requirement in full (incl. FLP link) |
+| `create_requirement(title, …, solution, scope_id, element_id)` | Create — in ANY solution by name; attached element lands in the named scope |
+| `create_requirements_batch(items, solution, scope_id, …)` | Many at once; shared context resolved once; continues on row errors |
+| `update_requirement(guid, …)` | MERGE-update editable fields |
+| `list_requirement_actions` / `execute_requirement_action` | Lifecycle actions (PPF) |
+| `withdraw` / `submit_for_approval` / `approve` / `reject_requirement` | Canonical lifecycle steps |
+| **SolDoc elements & tree** | |
+| `search_solution_elements(query, solution)` | Flat element search in any solution |
+| `attach_element(…, scope_id, solution)` | Attach element under a named scope (re-run = re-scope in place) |
+| `set_element_scope(requirement_guid, element_id, scope)` | Explicitly re-file an attached element's scope |
+| `list_requirement_elements` / `detach_element` | Read / remove element links |
+| `soldoc_context` / `soldoc_list_scopes` / `soldoc_browse` / `soldoc_get_element` | Tree navigation; all accept `solution=` names |
+| **Attachments (requirements, WPs, WIs)** | |
+| `list_attachments(guid)` | Files + URL links on any object |
+| `upload_attachment(guid, file_path \| filename+content_b64)` | Attach a file (verified) |
+| `attach_url(guid, url, title)` | Attach a URL link (verified) |
+| `download_attachment(guid, doc_id, save_to)` | Byte-exact download |
+| `delete_attachment(guid, doc_id)` | Remove an attachment (verified) |
+| **Work Packages & Work Items** | |
+| `create_work_package(requirement_guid, title, …)` | Create WP (S1IT) linked to its Approved requirement (self-verified) |
+| `assign_work_package` / `withdraw_work_package` | Link / withdraw |
+| `create_work_item(work_package_guid, description, …)` | **Create a Work Item (scope item) that PERSISTS** — auto-scoping + auto component pick |
+| `list_scope_components(work_package_guid)` | Valid technical components for WIs under a WP |
+| `list_work_items(work_package_guid)` | Scope items under a WP |
 | **Generic (any object type)** | |
-| `search_workspaces(process_type, query, top)` | Search any type (defect, request_for_change, risk, work_item_nc, …) by title |
-| `get_workspace(id_or_guid, process_type)` | Read any object's header by ObjectId or GUID |
-| `list_workspace_actions(id_or_guid, process_type)` | List lifecycle actions for any object |
-| `execute_workspace_action(id_or_guid, action_id, process_type)` | Run a lifecycle action on any object |
+| `search_workspaces` / `get_workspace` / `list_workspace_actions` / `execute_workspace_action` | Read + lifecycle for every ProcessType (Defect, RfC, Risk, …) |
 
 ## Coverage (toward full browser parity)
 
 **Covered**
-- **Requirements** — full CRUD: create, read, search, update, attach/list/detach SolDoc elements, and the whole lifecycle (submit → approve/reject/withdraw, or any action via `execute_requirement_action`).
-- **Work Packages** — create (auto-links to an Approved requirement, self-verified), assign existing, withdraw, list Work Items.
-- **SolDoc hierarchy** — navigate the process tree (`soldoc_*`), list scopes, search elements.
-- **All object types (read + lifecycle)** — Defect, Request for Change, Risk, Master WP, Work Item, Urgent Change, Defect Correction, plus Requirement/WP — via the generic `search_workspaces` / `get_workspace` / `list_workspace_actions` / `execute_workspace_action` (built on `CRM_GENERIC_SRV`, so one uniform interface across every `ProcessType`).
+- **Requirements** — full CRUD in **any solution by name**, batch create, trustworthy filtered listing with FLP deep links, attach/re-scope/detach SolDoc elements, whole lifecycle.
+- **The full chain Requirement → Work Package → Work Item, entirely headless** — create+approve a requirement, create+link the WP, move it into Scoping, and create persisting Work Items with valid technical components.
+- **Attachments** — upload files, attach URL links, list, download, delete — on requirements, WPs and WIs.
+- **SolDoc hierarchy** — tree navigation, scope resolution by name, element search — across all solutions.
+- **All object types (read + lifecycle)** — Defect, RfC, Risk, Master WP, Urgent Change, Defect Correction … via the generic layer (`CRM_GENERIC_SRV`).
 
-**Not built yet** (needs more UI capture / per-type flows)
-- Creating **Work Items** — `BTSCOPE` scope items live inside the WP's *stateful CRM one-order document*. The two UI steps (add empty row → fill with a `ConfigItem` from the component value-help) were captured and reproduced, but a stateless `POST BTSCOPESET` returns a **transient** row that never commits — there's a one-order save/commit step not yet reverse-engineered. `list_work_items` (read) works; `create_work_item` is coded and fails loudly rather than silently no-op'ing.
+**Not built yet**
+- Type-specific **create** flows for Defect / RfC / Risk (defects are normally born from test executions, RfCs from ChaRM — separate capture projects; read + lifecycle already work via the generic layer).
 - Editing **WP fields** and WP↔requirement **unassign** (`wpUnassignmentFromRequirement` — structured param, uncaptured).
-- Type-specific **create** flows for Defect / RfC / Risk (each is its own form).
-- **Attachments/documents** (`DROP_DOC_SRV`) and deeper SolDoc (attributes, assigned docs/test cases, structure editing).
-- Richer requirement/query **filters** (by status/project/owner) beyond title substring.
+- Deeper SolDoc authoring (attributes, assigned docs/test cases, structure editing).
+
+## Query semantics on this gateway (READ FIRST — verified live)
+
+The SALM gateway **silently ignores** most `$filter` fields instead of erroring:
+
+- `REQUIREMENTSet`: only `BranchId`, `RequirementId` (exact) and `RequirementTitle`
+  (exact) are honored. Status/priority/owner/project predicates are dropped — and
+  when a dropped predicate is present, even `$top` is ignored.
+- `or`-chains keep only the **last** predicate. `$orderby` returns 500.
+  `$count`/`$inlinecount` return wrong numbers. On a BranchId-filtered set,
+  `$skip` **lies** — every page returns the same window.
+- The one reliable enumerator is `CRM_GENERIC_SRV/WORKSPACESET` with `ProcessType`
+  + `substringof(…, Description)` — honored, and rows come back **newest first**.
+  `list_requirements` is built on it; everything else is filtered client-side.
+
+## The Work Item commit recipe (hard-won)
+
+A plain `POST BTSCOPESET` returns 201 and a `WpItemGuid` — and the backend
+**silently discards the row**. Three conditions make it persist:
+
+1. the WP is in **Scoping** or later (`S1ITR_HANDOVER_TO_SCOPING` on a fresh WP);
+2. `ConfigItem` is **valid for this WP/type** — the component value help itself
+   returns empty unless filtered by `ProcessType` **and** `SystemSwitch`;
+3. the fill is a **deep create** to top-level `BTSCOPESET` including an (empty)
+   `BTSCOPE_PARTNERSSet` array — the deep-create signature triggers the CRM
+   one-order save.
+
+`create_work_item` automates all three and self-verifies via `list_work_items`.
+
+## Attachments: RPC-over-OData
+
+`DROP_DOC_SRV` requires an `Action` discriminator on every call, of the form
+`<consumer app id> + <operation suffix>` (e.g. `…attachments_Document_Create`,
+`…_Document_Create_Url`, delete via HTTP `DELETE …?Action=…_Document_Delete`).
+List = `CharmWP_WI_BRSet(CrmId,BranchId)/attachedDeltaDocuments`; download =
+`DocumentContentCollection(…)/$value`. Works for any CRM object (Req/WP/WI).
 
 ## Connectivity
 
@@ -111,12 +154,14 @@ The HTTP client is **reused across calls** (one cookie load + one CSRF token, co
 
 - `config.py` — env-driven configuration (loads `.env`)
 - `refresh_session.py` / `refresh-session.ps1` — Playwright SSO cookie minting
-- `client.py` — cookie-only httpx client (CSRF, get/create/merge/function)
-- `requirements.py` — requirement domain operations
-- `workpackages.py` — Work Package create/assign/withdraw + list work items
+- `client.py` — cookie-only httpx client (CSRF, transient-fault retries, safe paging)
+- `solutions.py` — solution/branch/scope resolution by NAME, cached
+- `requirements.py` — requirement domain ops (create/batch/list/lifecycle/elements)
+- `attachments.py` — files + URL links on any object (`DROP_DOC_SRV`)
+- `workpackages.py` — WP create/assign/withdraw + Work Item create/list/components
 - `workspaces.py` — generic operations for every object type (`CRM_GENERIC_SRV`)
 - `soldoc.py` — Solution Documentation tree navigation (`soldoc_node_selection_srv`)
-- `server.py` — FastMCP stdio server (30 tools)
+- `server.py` — FastMCP stdio server (42 tools)
 - `test_mcp.py` — read-only MCP stdio smoke test · `test_units.py` — offline unit tests
 
 ## Notes / gotchas (verified against a live SolMan 7.2 Focused Build system)
@@ -146,5 +191,6 @@ The HTTP client is **reused across calls** (one cookie load + one CSRF token, co
   requirement appears there as a `WsType='Requirement'` row) — so `assigned` reflects the real state.
 - **Lifecycle note:** an **Approved** requirement can no longer be Withdrawn — only **Postponed**
   (`S1BR_POSTPONE`). Withdraw (`S1BR_CANCEL`) is only available from Draft / To Be Approved.
-- Work Items are WP **scope items** (`BTSCOPE`): `POST WORKSPACESET(<WP guid>,'S1IT')/BTSCOPESet`
-  (not yet exposed as a tool).
+- Work Items are WP **scope items** (`BTSCOPE`). Creating one that PERSISTS needs the
+  three-condition recipe (see "The Work Item commit recipe" above) — `create_work_item`
+  automates it.
