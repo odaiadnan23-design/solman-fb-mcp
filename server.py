@@ -15,11 +15,21 @@ from mcp.server.fastmcp import FastMCP
 import config
 import requirements as rq
 import soldoc as sd
+import solutions as sol
 import workpackages as wp
 import workspaces as wsp
 from client import SessionExpired, SolmanError, session_status
 
 mcp = FastMCP("solman-fb")
+
+
+def _branch_for(solution: str, branch_id: str) -> str | None:
+    """Resolve an explicit branch id, or a solution name/id, to a branch id."""
+    if branch_id:
+        return branch_id
+    if solution:
+        return sol.resolve_context(solution)["branch_id"]
+    return None
 
 
 def _wrap(fn, *args, **kwargs) -> str:
@@ -78,22 +88,24 @@ def create_requirement(
     effort: int = 0,
     element_id: str = "",
     scope_id: str = "SAP_DEFAULT_SCOPE",
+    solution: str = "",
 ) -> str:
     """Create a Focused Build requirement (ProcessType S1BR).
 
     priority: '1' High | '2' Medium | '3' Low. classification: fit|gap|wricef|non-functional.
     Title is truncated to 40 chars. external_reference maps to the ZZFLD00000B custom field.
-    Env fields default to the configured working context if blank; set planned_project +
-    planned_project_guid together to file under a specific project. If element_id is provided,
-    the Solution element is attached after creation under scope_id — pass the target
-    release/wave scope (from soldoc_list_scopes) so the link is filed in that scope rather
-    than the SAP_DEFAULT_SCOPE catch-all.
+    solution accepts a NAME or id ("P1M", "S4P") — its Design branch is resolved
+    automatically, and scope_id may then be a scope NAME ("Release 5"). In a non-default
+    solution the env team/project defaults are NOT applied (pass planned_project explicitly).
+    If element_id is provided, the Solution element is attached after creation under the
+    resolved scope — always pass the target release/wave scope so the link is filed there
+    rather than in the SAP_DEFAULT_SCOPE catch-all.
     """
     return _wrap(
         rq.create_requirement, title, priority, classification, description, remarks,
         suggested_solution, external_reference, category_id, owner_bp, owner_name,
         solution_id or None, branch_id or None, planned_project or None,
-        planned_project_guid or None, value, effort, element_id, scope_id,
+        planned_project_guid or None, value, effort, element_id, scope_id, solution,
     )
 
 
@@ -158,16 +170,25 @@ def execute_requirement_action(guid: str, action_id: str) -> str:
 
 
 @mcp.tool()
-def search_solution_elements(query: str, branch_id: str = "", top: int = 15) -> str:
-    """Search Solution Documentation elements by name substring (for attaching to a requirement)."""
-    return _wrap(rq.search_solution_elements, query, branch_id, top)
+def search_solution_elements(query: str, branch_id: str = "", top: int = 15,
+                             solution: str = "") -> str:
+    """Search Solution Documentation elements by name substring (for attaching to a requirement).
+
+    solution accepts a name/id ("P1M") — searches that solution's Design branch.
+    """
+    return _wrap(rq.search_solution_elements, query, branch_id, top, solution)
 
 
 @mcp.tool()
 def attach_element(requirement_guid: str, element_id: str, branch_id: str = "",
-                   scope_id: str = "SAP_DEFAULT_SCOPE") -> str:
-    """Attach a Solution Documentation element (from search_solution_elements) to a requirement."""
-    return _wrap(rq.attach_element, requirement_guid, element_id, branch_id or None, scope_id)
+                   scope_id: str = "SAP_DEFAULT_SCOPE", solution: str = "") -> str:
+    """Attach a Solution Documentation element (from search_solution_elements) to a requirement.
+
+    solution accepts a name/id; scope_id may then be a scope NAME ("Release 5").
+    Re-running with a different scope updates the existing link in place (re-scope).
+    """
+    return _wrap(rq.attach_element, requirement_guid, element_id, branch_id or None,
+                 scope_id, solution)
 
 
 @mcp.tool()
@@ -194,34 +215,52 @@ def list_branches(solution_id: str) -> str:
     return _wrap(rq.branches_for_solution, solution_id)
 
 
+@mcp.tool()
+def resolve_context(solution: str = "", branch: str = "", scope: str = "") -> str:
+    """Resolve solution/branch/scope NAMES (or ids) to ids in one call.
+
+    Examples: solution="P1M" -> its Design branch; solution="S4P", scope="Release 7"
+    -> the branch + that release scope's id. Ambiguous names error with candidates.
+    Use this before create/attach/browse when working outside the default solution.
+    """
+    return _wrap(sol.resolve_context, solution, branch, scope)
+
+
+@mcp.tool()
+def solution_overview(solution: str) -> str:
+    """One-call orientation for a solution (by name or id): its branches, each with all scopes."""
+    return _wrap(sol.solution_overview, solution)
+
+
 # --- Solution Documentation hierarchy (dedicated tree service) -------------
 @mcp.tool()
-def soldoc_context(branch_id: str = "") -> str:
-    """SolDoc root context for a branch (solution/branch names). Defaults to the configured default branch."""
-    return _wrap(sd.context, branch_id or None)
+def soldoc_context(branch_id: str = "", solution: str = "") -> str:
+    """SolDoc root context for a branch (solution/branch names). solution accepts a name/id ("P1M")."""
+    return _wrap(lambda: sd.context(_branch_for(solution, branch_id)))
 
 
 @mcp.tool()
-def soldoc_list_scopes(branch_id: str = "") -> str:
-    """List SolDoc scopes (views) for a branch — e.g. 'Show All', team/release scopes used for WP/WI scoping."""
-    return _wrap(sd.list_scopes, branch_id or None)
+def soldoc_list_scopes(branch_id: str = "", solution: str = "") -> str:
+    """List SolDoc scopes (views) for a branch — 'Show All', team/release scopes. solution accepts a name/id."""
+    return _wrap(lambda: sd.list_scopes(_branch_for(solution, branch_id)))
 
 
 @mcp.tool()
-def soldoc_browse(parent_element_id: str = "", branch_id: str = "", scope: str = "SAP_DEFAULT_SCOPE") -> str:
+def soldoc_browse(parent_element_id: str = "", branch_id: str = "",
+                  scope: str = "SAP_DEFAULT_SCOPE", solution: str = "") -> str:
     """Browse the Solution Documentation tree. Empty parent = top-level nodes; else the node's children.
 
     Each node has element_id, name, type (PROC/PROCSTEP/FOLDER/…), has_children, selectable, path.
-    `scope` accepts a scope id or name (from soldoc_list_scopes). Drill down by passing a node's
-    element_id (where has_children is true). element_id is the same id used by attach_element.
+    `solution` accepts a name/id ("P1M"); `scope` accepts a scope id or NAME. Drill down by passing
+    a node's element_id (where has_children is true). element_id is what attach_element consumes.
     """
-    return _wrap(sd.browse, parent_element_id, branch_id or None, scope)
+    return _wrap(lambda: sd.browse(parent_element_id, _branch_for(solution, branch_id), scope))
 
 
 @mcp.tool()
-def soldoc_get_element(element_id: str, branch_id: str = "") -> str:
-    """Read a single SolDoc tree node (incl. full path) by element id."""
-    return _wrap(sd.get_element, element_id, branch_id or None)
+def soldoc_get_element(element_id: str, branch_id: str = "", solution: str = "") -> str:
+    """Read a single SolDoc tree node (incl. full path) by element id. solution accepts a name/id."""
+    return _wrap(lambda: sd.get_element(element_id, _branch_for(solution, branch_id)))
 
 
 # --- Work Packages ---------------------------------------------------------

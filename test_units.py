@@ -139,6 +139,27 @@ def test_retry_io_write_does_not_retry_protocol_errors():
         assert calls["n"] == 1  # a write must NOT be re-sent on ambiguous faults
 
 
+def test_solution_match_semantics():
+    import solutions as sol
+    rows = [{"id": "AAA1", "name": "Main Solution-ALPHA"},
+            {"id": "BBB2", "name": "Main Solution-BETA"},
+            {"id": "CCC3", "name": "Non-SAP Solution-GAMMA"}]
+    m = lambda q: sol._match(q, rows, "id", "name", "solution")
+    assert m("BBB2")["id"] == "BBB2"                       # exact id
+    assert m("main solution-alpha")["id"] == "AAA1"        # exact name, case-insensitive
+    assert m("GAMMA")["id"] == "CCC3"                      # unique substring
+    try:
+        m("Main")                                          # ambiguous substring
+        assert False, "expected ValueError"
+    except ValueError as e:
+        assert "ambiguous" in str(e)
+    try:
+        m("ZZZ")                                           # no match
+        assert False, "expected ValueError"
+    except ValueError as e:
+        assert "no solution matches" in str(e)
+
+
 def test_results_all_pages_and_caps():
     class Fake:
         def __init__(self, total): self.total = total

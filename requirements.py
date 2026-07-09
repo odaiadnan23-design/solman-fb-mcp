@@ -100,8 +100,15 @@ def branches_for_solution(solution_id: str) -> list[dict]:
     return [{k: v for k, v in r.items() if k != "__metadata" and not isinstance(v, dict)} for r in rows]
 
 
-def search_solution_elements(query: str, branch_id: str = "", top: int = 15) -> list[dict]:
-    """Search Solution Documentation elements by name substring within a branch."""
+def search_solution_elements(query: str, branch_id: str = "", top: int = 15,
+                             solution: str = "") -> list[dict]:
+    """Search Solution Documentation elements by name substring within a branch.
+
+    `solution` accepts a solution name/id ("P1M") — its Design branch is used.
+    """
+    if solution and not branch_id:
+        import solutions as _sol
+        branch_id = _sol.resolve_context(solution)["branch_id"]
     branch_id = branch_id or DEFAULTS["BranchId"]
     flt = f"BranchId eq '{odata_literal(branch_id)}' and substringof('{odata_literal(query)}',ElementName)"
     with SolmanClient(service=config.SVC_BIZ_REQ) as c:
@@ -132,14 +139,17 @@ def create_requirement(
     effort: int = 0,
     element_id: str = "",
     scope_id: str = "SAP_DEFAULT_SCOPE",
+    solution: str = "",
 ) -> dict:
     """Create a requirement. Returns {RequirementId, RequirementGuid, ...}.
 
     `priority`: '1'|'2'|'3'. `classification`: fit|gap|wricef|non-functional.
-    Env-specific fields default to the configured working context (see DEFAULTS).
+    `solution` accepts a solution NAME or id ("P1M", "S4P", ...) — the branch is
+    resolved automatically (Design) and `scope_id` may then be a scope NAME too
+    ("Release 5"). Without `solution`, env defaults apply (see DEFAULTS).
     If `element_id` is given, the Solution element is attached after create under
-    `scope_id` — pass the target release/wave scope (from `list_scopes`) so the link
-    lands in that scope, not the `SAP_DEFAULT_SCOPE` catch-all.
+    the resolved scope — pass the target release/wave scope so the link lands
+    there, not in the `SAP_DEFAULT_SCOPE` catch-all.
     """
     if not title:
         raise ValueError("title is required")
@@ -148,6 +158,15 @@ def create_requirement(
     cls = CLASSIFICATION.get(classification.lower())
     if not cls:
         raise ValueError(f"classification must be one of {list(CLASSIFICATION)}")
+
+    non_default_solution = False
+    if solution or (scope_id and scope_id != "SAP_DEFAULT_SCOPE"):
+        import solutions as _sol  # local import; no cycle (solutions never imports us)
+        ctx = _sol.resolve_context(solution, branch_id or "", scope_id or "")
+        solution_id = solution_id or ctx["solution_id"]
+        branch_id = branch_id or ctx["branch_id"]
+        scope_id = ctx["scope_id"]
+        non_default_solution = bool(solution_id) and solution_id != DEFAULTS["SolutionId"]
 
     prio_name = {"1": "1: High", "2": "2: Medium", "3": "3: Low"}.get(priority, "2: Medium")
     body: dict[str, Any] = {
@@ -163,10 +182,12 @@ def create_requirement(
         "Value": value, "Effort": effort,
         "SolutionId": solution_id or DEFAULTS["SolutionId"],
         "BranchId": branch_id or DEFAULTS["BranchId"],
-        "RequirementsTeamName": DEFAULTS["RequirementsTeamName"],
-        "RequirementsTeamBpNb": DEFAULTS["RequirementsTeamBpNb"],
-        "PlannedProject": planned_project or DEFAULTS["PlannedProject"],
-        "PlannedProjectGuid": planned_project_guid or DEFAULTS["PlannedProjectGuid"],
+        # Team/PlannedProject env defaults are solution-specific: never let them
+        # leak into a DIFFERENT solution's requirement — blank unless passed.
+        "RequirementsTeamName": "" if non_default_solution else DEFAULTS["RequirementsTeamName"],
+        "RequirementsTeamBpNb": "" if non_default_solution else DEFAULTS["RequirementsTeamBpNb"],
+        "PlannedProject": planned_project or ("" if non_default_solution else DEFAULTS["PlannedProject"]),
+        "PlannedProjectGuid": planned_project_guid or ("" if non_default_solution else DEFAULTS["PlannedProjectGuid"]),
         # Mandatory — omitting these silently no-ops the create.
         "Category": {"CatId": category_id or DEFAULTS["CategoryId"]},
         "OwnerBpNo": owner_bp or DEFAULTS["OwnerBpNo"],
@@ -256,8 +277,18 @@ def reject_requirement(guid: str) -> dict:
 
 
 def attach_element(requirement_guid: str, element_id: str, branch_id: str | None = None,
-                   scope_id: str = "SAP_DEFAULT_SCOPE") -> dict:
-    """Attach a Solution Documentation element to a requirement (verified)."""
+                   scope_id: str = "SAP_DEFAULT_SCOPE", solution: str = "") -> dict:
+    """Attach a Solution Documentation element to a requirement (verified).
+
+    `solution` accepts a name/id ("P1M"); `scope_id` may then be a scope NAME
+    ("Release 5") — both are resolved to ids on the right branch. Re-running with
+    a new scope UPDATES the existing link in place (no duplicate row).
+    """
+    if solution or (scope_id and scope_id != "SAP_DEFAULT_SCOPE"):
+        import solutions as _sol
+        ctx = _sol.resolve_context(solution, branch_id or "", scope_id or "")
+        branch_id = branch_id or ctx["branch_id"]
+        scope_id = ctx["scope_id"]
     g = _dash(requirement_guid)
     with SolmanClient(service=config.SVC_BIZ_REQ) as c:
         ok = _assign_element(c, g, element_id, branch_id or DEFAULTS["BranchId"], scope_id)
