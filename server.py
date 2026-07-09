@@ -306,6 +306,23 @@ def soldoc_get_element(element_id: str, branch_id: str = "", solution: str = "")
     return _wrap(lambda: sd.get_element(element_id, _branch_for(solution, branch_id)))
 
 
+@mcp.tool()
+def assign_structures(crm_guid: str, element_ids: list[str], branch_id: str = "",
+                      solution: str = "", solution_name: str = "") -> str:
+    """Assign SolDoc elements (structures) to a Work Package or Work Item, verified.
+
+    element_ids from soldoc_browse/search_solution_elements. For REQUIREMENTS use
+    attach_element instead. solution accepts a name/id ("P1M")."""
+    return _wrap(lambda: sd.assign_structures(crm_guid, element_ids,
+                                              _branch_for(solution, branch_id), solution_name))
+
+
+@mcp.tool()
+def list_structures(crm_guid: str, branch_id: str = "", solution: str = "") -> str:
+    """List the SolDoc structures assigned to a Work Package / Work Item."""
+    return _wrap(lambda: sd.list_structures(crm_guid, _branch_for(solution, branch_id)))
+
+
 # --- Attachments (files + URL links; works on requirements, WPs, WIs) -------
 @mcp.tool()
 def list_attachments(guid: str, branch_id: str = "", solution: str = "") -> str:

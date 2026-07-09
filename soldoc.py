@@ -77,6 +77,47 @@ def browse(parent_element_id: str = "", branch: str | None = None,
     return [_node(x) for x in rows]
 
 
+def assign_structures(crm_guid: str, element_ids: list[str], branch: str | None = None,
+                      solution_name: str = "", branch_name: str = "Design") -> dict:
+    """Assign SolDoc elements (structures) to a CRM object — Work Package / Work Item.
+
+    POST soldoc_node_selection_srv/CrmObjectSet with an assignElements array (the
+    drop-doc UI's mechanism). Returns per-element AssignError (empty = success).
+    Verified read-back: DROP_DOC CharmWP_WI_BRSet(CrmId,BranchId)/relevantStructures.
+    NOTE: for requirements use attach_element (Assign_Requirement) instead.
+    """
+    if not element_ids:
+        raise ValueError("element_ids is empty")
+    b = _branch(branch)
+    body = {"BranchId": b, "BranchName": branch_name, "CrmId": crm_guid.replace("-", "").upper(),
+            "SolutionName": solution_name, "ScopeId": "",
+            "assignElements": [{"Assign": True, "ElementId": e} for e in element_ids]}
+    with SolmanClient(service=config.SVC_SOLDOC) as c:
+        r = c.create("CrmObjectSet", body)
+        results = (r.get("assignElements") or {}).get("results", [])
+        out = [{"element_id": x.get("ElementId"), "error": x.get("AssignError") or ""}
+               for x in results]
+    # verify via the drop-doc relevantStructures view
+    with SolmanClient(service=config.SVC_DROP_DOC) as c:
+        rows = c.results(f"CharmWP_WI_BRSet(CrmId='{body['CrmId']}',BranchId='{b}')/relevantStructures")
+        have = {x.get("StructureId") for x in rows}
+    for o in out:
+        o["verified"] = o["element_id"] in have
+    return {"crm_guid": body["CrmId"], "assigned": out,
+            "total_structures_on_object": len(have)}
+
+
+def list_structures(crm_guid: str, branch: str | None = None) -> list[dict]:
+    """List the SolDoc structures assigned to a WP/WI (drop-doc relevantStructures)."""
+    b = _branch(branch)
+    g = crm_guid.replace("-", "").upper()
+    with SolmanClient(service=config.SVC_DROP_DOC) as c:
+        rows = c.results(f"CharmWP_WI_BRSet(CrmId='{g}',BranchId='{b}')/relevantStructures")
+    return [{"element_id": r.get("StructureId"), "name": r.get("ObjectName"),
+             "type": r.get("ElementType"), "business_process": r.get("BusinessProcess")}
+            for r in rows]
+
+
 def get_element(element_id: str, branch: str | None = None) -> dict:
     """Resolve a single element (incl. full Path) by id.
 
