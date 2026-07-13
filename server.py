@@ -17,6 +17,7 @@ import config
 import requirements as rq
 import soldoc as sd
 import solutions as sol
+import testsuite as tst
 import workpackages as wp
 import workspaces as wsp
 from client import SessionExpired, SolmanError, session_status
@@ -452,6 +453,119 @@ def execute_workspace_action(id_or_guid: str, action_id: str, process_type: str)
     return _wrap(wsp.execute_action, id_or_guid, action_id, process_type)
 
 
+# --- Test Suite: test cases, steps, xlsx, plans/packages -------------------
+@mcp.tool()
+def list_test_cases(query: str = "", folder: str = "", top: int = 25) -> str:
+    """List test cases by name substring and/or folder id (see test_lookup('folders'))."""
+    return _wrap(tst.list_test_cases, query, folder, top)
+
+
+@mcp.tool()
+def get_test_case(case_id: str, version: int = 1, lang: str = "") -> str:
+    """Read a test case header (description, status, priority, prerequisites, exit criteria)."""
+    return _wrap(tst.get_test_case, case_id, version, lang)
+
+
+@mcp.tool()
+def list_test_case_steps(case_id: str, version: int = 1, lang: str = "") -> str:
+    """List a test case's steps (ordered) with description/expected-result/instruction."""
+    return _wrap(tst.list_steps, case_id, version, lang)
+
+
+@mcp.tool()
+def create_test_case(name: str, folder: str, solution: str = "NONE",
+                     status_schema: str = "", is_library: bool = True, lang: str = "") -> str:
+    """Create a test case. folder = a folder id (test_lookup('folders')); solution = id or 'NONE'."""
+    return _wrap(tst.create_test_case, name, folder, solution, status_schema, is_library, lang)
+
+
+@mcp.tool()
+def update_test_case(case_id: str, version: int = 1, lang: str = "",
+                     description: str = "", prerequisites: str = "", exit_criteria: str = "",
+                     notes: str = "", priority: str = "", person_responsible: str = "") -> str:
+    """MERGE-update a test case header. Only non-empty fields are sent."""
+    fields = {k: v for k, v in {
+        "Description": description, "Prerequisites": prerequisites,
+        "ExitCriteria": exit_criteria, "Notes": notes, "Priority": priority,
+        "PersonResponsible": person_responsible}.items() if v}
+    return _wrap(tst.update_test_case, case_id, version, lang, **fields)
+
+
+@mcp.tool()
+def set_test_case_steps(case_id: str, steps: list[dict], version: int = 1,
+                        lang: str = "", append: bool = False) -> str:
+    """Write a test case's steps (deep-save, the only way that persists — a direct step
+    POST silently no-ops). REPLACES the list unless append=True. Each step:
+    {description, expected_result?, instruction?, evidence?, parent_id?}."""
+    return _wrap(tst.set_steps, case_id, steps, version, lang, append)
+
+
+@mcp.tool()
+def delete_test_case(case_id: str, version: int = 1, lang: str = "") -> str:
+    """Delete a test case (by key). Irreversible — use for throwaways/cleanup."""
+    return _wrap(tst.delete_test_case, case_id, version, lang)
+
+
+@mcp.tool()
+def test_case_where_used(case_id: str, version: int = 1, lang: str = "") -> str:
+    """List the test plans that contain a test case (with FLP/WebDynpro links)."""
+    return _wrap(tst.where_used, case_id, version, lang)
+
+
+@mcp.tool()
+def download_test_case_template(save_to: str) -> str:
+    """Download the standard test-case upload template (xlsx) to a local path."""
+    return _wrap(tst.download_template, save_to)
+
+
+@mcp.tool()
+def download_test_case_xlsx(case_id: str, save_to: str, version: int = 1) -> str:
+    """Download a test case (header + steps) as the upload-format xlsx."""
+    return _wrap(tst.download_test_case_xlsx, case_id, save_to, version)
+
+
+@mcp.tool()
+def upload_test_cases_xlsx(file_path: str, validate_only: bool = True, first_row: int = 2,
+                           branch: str = "", with_executables: bool = False) -> str:
+    """Upload a filled test-case xlsx (auto-maps standard template headers -> attributes).
+    DEFAULTS TO VALIDATE-ONLY; pass validate_only=False to actually create/update. Pass
+    branch to enable the SolDoc-path column ('Upload into SolDoc')."""
+    return _wrap(lambda: tst.upload_test_cases_xlsx(
+        file_path, validate_only=validate_only, first_row=first_row,
+        branch=branch, with_executables=with_executables))
+
+
+@mcp.tool()
+def list_test_plans(solution: str = "", query: str = "", top: int = 50) -> str:
+    """List test plans for a solution (name/id, e.g. 'P1M'); query filters id/description."""
+    return _wrap(tst.list_test_plans, solution, query, top)
+
+
+@mcp.tool()
+def list_test_packages(plan_guid: str, top: int = 100) -> str:
+    """List the test packages under a test plan (plan_guid from list_test_plans)."""
+    return _wrap(tst.list_test_packages, plan_guid, top)
+
+
+@mcp.tool()
+def test_execution_status(solution: str = "", top: int = 100) -> str:
+    """Test-status progress per plan (executed/failed/blocked) for a solution."""
+    return _wrap(tst.test_execution_status, solution, top)
+
+
+@mcp.tool()
+def list_test_parameters(case_id: str, version: int = 1, lang: str = "") -> str:
+    """List a test case's test-data parameters (variants)."""
+    return _wrap(tst.list_test_parameters, case_id, version, lang)
+
+
+@mcp.tool()
+def test_lookup(kind: str = "folders", top: int = 50) -> str:
+    """Test-suite reference values. kind: folders|status_schemas|statuses|priorities|solutions."""
+    return _wrap(tst.test_lookup, kind, top)
+
+
 if __name__ == "__main__":
     config.require_host()   # fail fast with a clear message if .env isn't configured
     mcp.run()
+

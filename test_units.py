@@ -173,6 +173,32 @@ def test_results_all_pages_and_caps():
     assert len(f.results_all("X", page_size=100, max_rows=150)) == 150
 
 
+def test_testsuite_key_builder():
+    import testsuite as tst
+    k = tst._key("ABC123", 2, "DE")
+    assert k == "TestCaseHeaderSet(CaseId='ABC123',CaseVersion=2,Language='DE')"
+    assert "Language='EN'" in tst._key("X")  # default language
+
+
+def test_testsuite_upload_field_map_covers_template():
+    import testsuite as tst
+    headers = ["Test Case Name", "Folder", "Step Number", "Step Description",
+               "Step Expected Result", "Test Case Description"]
+    for h in headers:
+        assert tst._UPLOAD_FIELD_KEYS.get(h.lower()), f"no key for {h!r}"
+    assert tst._UPLOAD_FIELD_KEYS["test case name"] == "CASE.NAME"
+    assert tst._UPLOAD_FIELD_KEYS["step expected result"] == "STXT.EXPECTED_RESULT"
+
+
+def test_testsuite_update_rejects_unknown_field():
+    import testsuite as tst
+    try:
+        tst.update_test_case("cid", 1, "EN", BogusField="x")
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     passed = 0

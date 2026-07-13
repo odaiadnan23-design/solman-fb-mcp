@@ -55,7 +55,7 @@ once and the cookie is reused:
 > system usually has its ADT node closed — hence the dedicated refresh script
 > that lands on an allowed OData path.
 
-## Tools (42)
+## Tools (60)
 
 | Tool | Purpose |
 |------|---------|
@@ -93,6 +93,21 @@ once and the cookie is reused:
 | `create_work_item(work_package_guid, description, …)` | **Create a Work Item (scope item) that PERSISTS** — auto-scoping + auto component pick |
 | `list_scope_components(work_package_guid)` | Valid technical components for WIs under a WP |
 | `list_work_items(work_package_guid)` | Scope items under a WP |
+| **Test Suite — test cases, steps, xlsx, plans/packages** | |
+| `list_test_cases(query, folder)` / `get_test_case` | Find/read test cases (server-side name search + folder) |
+| `list_test_case_steps(case_id)` | Ordered steps (description / expected result / instruction) |
+| `create_test_case(name, folder, solution)` | Create a test case (folder id from `test_lookup('folders')`) |
+| `update_test_case(case_id, …)` | MERGE header (description/prerequisites/exit-criteria/priority/…) |
+| `set_test_case_steps(case_id, steps, append)` | Write steps (deep-save; replace or append) |
+| `delete_test_case(case_id)` | Delete (cleanup) |
+| `test_case_where_used(case_id)` | Test plans that contain the case (with links) |
+| `download_test_case_template(save_to)` | The blank upload template (xlsx) |
+| `download_test_case_xlsx(case_id, save_to)` | A case's header+steps as the upload-format xlsx |
+| `upload_test_cases_xlsx(file_path, validate_only)` | Upload a filled xlsx — auto-maps template headers; **validate-only by default** |
+| `list_test_plans(solution, query)` / `list_test_packages(plan_guid)` | Browse plans & their packages |
+| `test_execution_status(solution)` | Test-status progress per plan |
+| `list_test_parameters(case_id)` | Test-data parameters (variants) |
+| `test_lookup(kind)` | folders / status_schemas / statuses / priorities / solutions |
 | **Generic (any object type)** | |
 | `search_workspaces` / `get_workspace` / `list_workspace_actions` / `execute_workspace_action` | Read + lifecycle for every ProcessType (Defect, RfC, Risk, …) |
 
@@ -102,7 +117,8 @@ once and the cookie is reused:
 - **Requirements** — full CRUD in **any solution by name**, batch create, trustworthy filtered listing with FLP deep links, attach/re-scope/detach SolDoc elements, whole lifecycle.
 - **The full chain Requirement → Work Package → Work Item, entirely headless** — create+approve a requirement, create+link the WP, move it into Scoping, and create persisting Work Items with valid technical components.
 - **Attachments** — upload files, attach URL links, list, download, delete — on requirements, WPs and WIs.
-- **SolDoc hierarchy** — tree navigation, scope resolution by name, element search — across all solutions.
+- **SolDoc hierarchy** — tree navigation, scope resolution by name, element search, and structure assignment on WPs/WIs — across all solutions.
+- **Test Suite** — test cases (CRUD + steps via deep-save), the **xlsx template flow** (download sample / download a case / upload a filled sheet with auto column-mapping, validate-only by default), test plans & packages (read/browse), where-used, execution status, test-data parameters.
 - **All object types (read + lifecycle)** — Defect, RfC, Risk, Master WP, Urgent Change, Defect Correction … via the generic layer (`CRM_GENERIC_SRV`).
 
 **Not built yet**
@@ -138,6 +154,28 @@ A plain `POST BTSCOPESET` returns 201 and a `WpItemGuid` — and the backend
 
 `create_work_item` automates all three and self-verifies via `list_work_items`.
 
+## Test Suite: deep-save + the xlsx flow
+
+- **Test cases** are keyed `(CaseId GUID, CaseVersion, Language)`. Create =
+  `POST TestCaseSet`; header edits = MERGE `TestCaseHeaderSet`.
+- **Steps DON'T save individually.** A direct `POST TestCaseStepSet` 201s but is
+  silently discarded — steps commit only via a **deep POST to `TestCaseSet`**
+  carrying `TestCasetoHeaderNav:[header]` with the whole step list nested in
+  `header.TestCaseHeadertoStepsNav` (same shape the designer UI submits).
+  `set_test_case_steps` builds that payload.
+- **xlsx flow** (`TM_TS_DESIGNER_SRV`): download the blank template
+  (`TestCaseDownloadSampleSet('')/$value`) or a case's steps
+  (`TestCaseDownloadSet`), and upload in two phases — (1) POST the raw file to
+  `TestCaseUploadSet` → the server parses it and returns an `UploadCacheId` plus
+  per-column header texts; (2) MERGE the cache entry with the column map
+  (`Col<letter> = "<ATTR.KEY>:<index>"`, e.g. `CASE.NAME`, `STXT.EXPECTED_RESULT`)
+  and `ValidateOnly`. Standard template headers auto-map. The SolDoc-path column
+  is only accepted when a branch is supplied ("Upload into SolDoc").
+- **Test plans/packages** are read via `TM_DASH_SRV` (`TestPlanSet` needs a
+  `SolutionId`; `TestPackageSet` filters by the plan's `TplnGuid`). Where-used per
+  case is the `TestCaseHeadertoWuTplnNav` header nav (the flat set returns nothing
+  standalone). Plan/package *creation* is the classic STWB_2 transaction — no OData.
+
 ## Attachments: RPC-over-OData
 
 `DROP_DOC_SRV` requires an `Action` discriminator on every call, of the form
@@ -160,8 +198,9 @@ The HTTP client is **reused across calls** (one cookie load + one CSRF token, co
 - `attachments.py` — files + URL links on any object (`DROP_DOC_SRV`)
 - `workpackages.py` — WP create/assign/withdraw + Work Item create/list/components
 - `workspaces.py` — generic operations for every object type (`CRM_GENERIC_SRV`)
-- `soldoc.py` — Solution Documentation tree navigation (`soldoc_node_selection_srv`)
-- `server.py` — FastMCP stdio server (42 tools)
+- `soldoc.py` — Solution Documentation tree navigation + structure assignment (`soldoc_node_selection_srv`)
+- `testsuite.py` — Test Suite: test cases/steps, xlsx upload/download, plans/packages (`TM_TS_DESIGNER_SRV`, `TM_TS_PARAM_SRV`, `TM_DASH_SRV`)
+- `server.py` — FastMCP stdio server (60 tools)
 - `test_mcp.py` — read-only MCP stdio smoke test · `test_units.py` — offline unit tests
 
 ## Notes / gotchas (verified against a live SolMan 7.2 Focused Build system)
