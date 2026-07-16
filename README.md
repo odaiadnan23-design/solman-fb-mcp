@@ -12,17 +12,87 @@ Point it at your own SolMan Focused Build system via `.env`. It is **cookie-only
 runtime** (never opens a browser); an out-of-band refresh script mints the session
 cookie via browser SSO.
 
-## Setup
+## Quickstart — install with one prompt in Claude Code
 
-```bash
-pip install -r requirements.txt          # mcp + httpx (+ playwright for refresh)
-python -m playwright install msedge      # or use an installed Edge/Chromium
-cp .env.example .env                      # then fill in your system (see below)
+New to it? Open **Claude Code** (desktop or CLI) in any folder and paste the prompt
+below. Claude does the whole install: clones the repo, sets up Python, helps you sign
+in once, registers the server, and verifies the connection. **The only thing you need
+to supply is your SolMan host** (you'll be asked for it).
+
+```text
+Set up the solman-fb-mcp server for me. Work through these steps and stop to ask me only where noted:
+
+1. Clone https://github.com/odaiadnan23-design/solman-fb-mcp.git into my home directory (skip the clone if it's already there) and cd into it.
+2. Make sure Python 3.11+ is available. Create a virtual environment (.venv) in the repo and install requirements.txt into it. Then run `python -m playwright install msedge` (skip if Microsoft Edge is already installed and usable).
+3. Copy .env.example to .env. Ask me for my SolMan Focused Build host (for example solman.mycompany.com) and SAP client (default 100), and write them into .env. Leave the other create-defaults blank for now — they're only needed later for creating requirements/work packages and can be discovered with the tools.
+4. Mint my login session: run `python refresh_session.py --timeout 300` (on Windows you can use `./refresh-session.ps1`). This opens a browser for single sign-on — I will complete the login. Wait until it writes the cookie file, then continue.
+5. Register the server with Claude Code at user scope:
+   `claude mcp add solman-fb -s user -e SAP_CLIENT=100 -- <the .venv python path> <the repo>/server.py`
+   Use the venv's python and the absolute path to server.py. If the `claude` CLI isn't available, add an equivalent stdio entry named "solman-fb" to my MCP config instead.
+6. Tell me to restart Claude Code (or reconnect MCP) so the new tools load.
+7. Once the tools are available, verify the connection by calling, in order: session_status, then list_process_types, then list_lookup with kind "solutions". Show me the results. If session_status reports the session expired, tell me to re-run step 4.
+
+Finish with a short summary of what worked and anything that still needs my input.
 ```
 
-Fill `.env` with your host and the site-specific ids. Discover the ids with the
-tools once connected: `list_lookup('solutions')`, `list_branches(<solutionId>)`,
-`list_lookup('projects'|'categories'|'priorities')`, and the `soldoc_*` tools.
+> Only `SOLMAN_HOST` is required to connect and read. The create-defaults in `.env`
+> (solution/owner/category, WP release targeting) are optional and only used when you
+> *create* requirements or work packages — discover them later with `list_lookup`,
+> `solution_overview`, and the `soldoc_*` tools.
+
+## Verify the connection
+
+In Claude Code, after the server is registered and you've refreshed the session:
+
+- `session_status()` → confirms the cookie is live (otherwise run the refresh).
+- `list_process_types()` → the Focused Build object types on your system.
+- `list_lookup('solutions')` → your solutions; then `solution_overview('<name>')` for its branches + scopes.
+
+If any tool returns `SESSION EXPIRED: … run refresh_session.py`, re-run the refresh and retry — that's the one manual step, and it's usually silent after the first sign-in.
+
+## Tips & use cases
+
+Talk to it in plain language — Claude picks the right tools. Examples:
+
+**Explore**
+- "What solutions, branches and scopes exist? Give me an overview of `<solution>`."
+- "List the last 20 requirements in `<solution>` with their status and owner."
+- "Find requirements about 'credit control' and show their FLP links."
+
+**Author the full Requirement → Work Package → Work Item chain**
+- "Create a requirement titled '`<title>`' in `<solution>`, classification WRICEF, and attach it to process step `<S…>`."
+- "Approve requirement `<id>`, create a Work Package under `<project>`, and add a Work Item to it."
+- "Attach this file / this Jira URL to requirement `<id>`."
+
+**Test Suite**
+- "Search test cases for 'invoice' and show which test plans use them."
+- "Download the test-case template, then upload this filled xlsx into `<solution>` (validate first)."
+- "Show the test execution status for `<solution>`."
+
+**Good habits**
+- **Use names, not GUIDs** — say "Release 5" or "`<solution>`"; the server resolves them (`resolve_context`).
+- **A requirement must be Approved before a Work Package can link** to it.
+- **Attach requirements to the Business-Process *reference* step** (under *Business Processes → …*), **not** the library original (under *Libraries → Process Step Library*) — the reference node is where traceability rolls up.
+- **xlsx uploads validate by default.** Review the validation result, then re-run with `validate_only=false` to commit.
+- Seeing `SESSION EXPIRED`? Run the refresh script — cookie refresh is the only out-of-band step.
+
+## Manual setup
+
+Prefer to do it by hand (or not using Claude Code to install)?
+
+```bash
+git clone https://github.com/odaiadnan23-design/solman-fb-mcp.git
+cd solman-fb-mcp
+pip install -r requirements.txt          # mcp + httpx (+ playwright for refresh)
+python -m playwright install msedge      # or use an installed Edge/Chromium
+cp .env.example .env                      # then fill in your host (see below)
+python refresh_session.py --timeout 300   # sign in once; mints the session cookie
+```
+
+Fill `.env` with your host (and, when you're ready to create objects, the site-specific
+ids). Discover the ids with the tools once connected: `list_lookup('solutions')`,
+`list_branches(<solutionId>)`, `list_lookup('projects'|'categories'|'priorities')`, and
+the `soldoc_*` tools.
 
 Register the server with your MCP client (stdio), e.g.:
 
@@ -30,7 +100,8 @@ Register the server with your MCP client (stdio), e.g.:
 { "mcpServers": { "solman-fb": {
     "type": "stdio",
     "command": "python",
-    "args": ["/path/to/solman-fb-mcp/server.py"]
+    "args": ["/path/to/solman-fb-mcp/server.py"],
+    "env": { "SAP_CLIENT": "100", "SAP_LANGUAGE": "EN" }
 } } }
 ```
 
