@@ -76,6 +76,20 @@ Talk to it in plain language — Claude picks the right tools. Examples:
 - **xlsx uploads validate by default.** Review the validation result, then re-run with `validate_only=false` to commit.
 - Seeing `SESSION EXPIRED`? Run the refresh script — cookie refresh is the only out-of-band step.
 
+## Requirements & SAP's External Requirement API
+
+This server manages requirements through the Requirements Fiori app's own OData service
+(`BUSINESS_REQUIREMENTS_SRV`) — it works over your interactive SSO with no backend setup.
+SAP also ships a separate, documented **External Requirement API**
+(`/SALM/EXT_R2D_INTEG_SRV`) built for wiring an external backlog (Jira, etc.) into Focused
+Build with external-ID mapping and two-way status sync — but it needs Basis to activate it
+and a service user.
+
+**[REQUIREMENTS.md](REQUIREMENTS.md)** covers both: the official field catalog
+(WRICEF / text / partner / status codes), how each MCP tool maps to the official operations,
+the shared rule that a requirement's branch comes from its Solution-Documentation element
+(not a create field), and when to use which path.
+
 ## Manual setup
 
 Prefer to do it by hand (or not using Claude Code to install)?
