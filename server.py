@@ -18,13 +18,15 @@ from mcp.server.mcpserver import MCPServer
 import attachments as att
 import config
 import requirements as rq
+import scout as sct
 import soldoc as sd
 import solutions as sol
 import sqlcache as sqc
 import testsuite as tst
 import workpackages as wp
 import workspaces as wsp
-from client import SessionExpired, SolmanError, session_status
+from client import SessionExpired, SolmanError
+from client import session_status as client_session_status
 
 mcp = MCPServer("solman-fb")
 
@@ -44,7 +46,7 @@ def _wrap(fn, *args, **kwargs) -> str:
         return json.dumps(fn(*args, **kwargs), indent=2, default=str)
     except SessionExpired as e:
         return f"SESSION EXPIRED: {e}"
-    except (SolmanError, ValueError) as e:
+    except (SolmanError, ValueError, sct.ScoutError) as e:
         return f"ERROR: {e}"
     except Exception as e:  # noqa: BLE001 - surface a clean message, not a traceback
         return f"ERROR ({type(e).__name__}): {e}"
@@ -53,7 +55,7 @@ def _wrap(fn, *args, **kwargs) -> str:
 @mcp.tool()
 def session_status() -> str:
     """Check whether the SolMan session is live. If not, run refresh_session.py to re-authenticate."""
-    return _wrap(session_status)
+    return _wrap(client_session_status)
 
 
 @mcp.tool()
@@ -83,7 +85,7 @@ def list_requirements(solution: str = "", branch_id: str = "", status: str = "",
 
     query = title substring (server-side). status ('Approved' or 'E0003') and solution/
     branch are client-side. owner/project/priority hydrate each candidate row (slower;
-    scan caps the candidates considered). solution accepts a name/id ("P1M").
+    scan caps the candidates considered). solution accepts a name/id ("PRD").
     """
     return _wrap(rq.list_requirements, solution, branch_id, status, priority,
                  owner, project, query, top, scan)
@@ -142,7 +144,7 @@ def create_requirement(
 
     priority: '1' High | '2' Medium | '3' Low. classification: fit|gap|wricef|non-functional.
     Title is truncated to 40 chars. external_reference maps to the ZZFLD00000B custom field.
-    solution accepts a NAME or id ("P1M", "S4P") — its Design branch is resolved
+    solution accepts a NAME or id ("PRD", "QAS") — its Design branch is resolved
     automatically, and scope_id may then be a scope NAME ("Release 5"). In a non-default
     solution the env team/project defaults are NOT applied (pass planned_project explicitly).
     If element_id is provided, the Solution element is attached after creation under the
@@ -222,7 +224,7 @@ def search_solution_elements(query: str, branch_id: str = "", top: int = 15,
                              solution: str = "") -> str:
     """Search Solution Documentation elements by name substring (for attaching to a requirement).
 
-    solution accepts a name/id ("P1M") — searches that solution's Design branch.
+    solution accepts a name/id ("PRD") — searches that solution's Design branch.
     """
     return _wrap(rq.search_solution_elements, query, branch_id, top, solution)
 
@@ -271,7 +273,7 @@ def session_keepalive() -> str:
     session is already gone this reports that, and refresh_session.py is still
     the out-of-band way back in.
     """
-    return _wrap(session_status)
+    return _wrap(client_session_status)
 
 
 @mcp.tool()
@@ -345,7 +347,7 @@ def list_branches(solution_id: str) -> str:
 def resolve_context(solution: str = "", branch: str = "", scope: str = "") -> str:
     """Resolve solution/branch/scope NAMES (or ids) to ids in one call.
 
-    Examples: solution="P1M" -> its Design branch; solution="S4P", scope="Release 7"
+    Examples: solution="PRD" -> its Design branch; solution="QAS", scope="Release 7"
     -> the branch + that release scope's id. Ambiguous names error with candidates.
     Use this before create/attach/browse when working outside the default solution.
     """
@@ -361,7 +363,7 @@ def solution_overview(solution: str) -> str:
 # --- Solution Documentation hierarchy (dedicated tree service) -------------
 @mcp.tool()
 def soldoc_context(branch_id: str = "", solution: str = "") -> str:
-    """SolDoc root context for a branch (solution/branch names). solution accepts a name/id ("P1M")."""
+    """SolDoc root context for a branch (solution/branch names). solution accepts a name/id ("PRD")."""
     return _wrap(lambda: sd.context(_branch_for(solution, branch_id)))
 
 
@@ -377,7 +379,7 @@ def soldoc_browse(parent_element_id: str = "", branch_id: str = "",
     """Browse the Solution Documentation tree. Empty parent = top-level nodes; else the node's children.
 
     Each node has element_id, name, type (PROC/PROCSTEP/FOLDER/…), has_children, selectable, path.
-    `solution` accepts a name/id ("P1M"); `scope` accepts a scope id or NAME. Drill down by passing
+    `solution` accepts a name/id ("PRD"); `scope` accepts a scope id or NAME. Drill down by passing
     a node's element_id (where has_children is true). element_id is what attach_element consumes.
     """
     return _wrap(lambda: sd.browse(parent_element_id, _branch_for(solution, branch_id), scope))
@@ -395,7 +397,7 @@ def assign_structures(crm_guid: str, element_ids: list[str], branch_id: str = ""
     """Assign SolDoc elements (structures) to a Work Package or Work Item, verified.
 
     element_ids from soldoc_browse/search_solution_elements. For REQUIREMENTS use
-    attach_element instead. solution accepts a name/id ("P1M")."""
+    attach_element instead. solution accepts a name/id ("PRD")."""
     return _wrap(lambda: sd.assign_structures(crm_guid, element_ids,
                                               _branch_for(solution, branch_id), solution_name))
 
@@ -619,7 +621,7 @@ def upload_test_cases_xlsx(file_path: str, validate_only: bool = True, first_row
 
 @mcp.tool()
 def list_test_plans(solution: str = "", query: str = "", top: int = 50) -> str:
-    """List test plans for a solution (name/id, e.g. 'P1M'); query filters id/description."""
+    """List test plans for a solution (name/id, e.g. 'PRD'); query filters id/description."""
     return _wrap(tst.list_test_plans, solution, query, top)
 
 
@@ -646,6 +648,71 @@ def test_lookup(kind: str = "folders", top: int = 50) -> str:
     """Test-suite reference values. kind: folders|status_schemas|statuses|priorities|solutions."""
     return _wrap(tst.test_lookup, kind, top)
 
+
+# --------------------------------------------------------------------------
+# Customizing Scout -- cross-system configuration comparison
+#
+# These reach the managed systems directly through vsp's ADT data preview, not
+# through SolMan. They are read-only, and Scout refuses any system not named in
+# SCOUT_SYSTEMS, so production is unreachable unless someone deliberately types
+# it into that allowlist.
+# --------------------------------------------------------------------------
+@mcp.tool()
+def scout_systems() -> str:
+    """Systems Customizing Scout may read, and whether each has a cached SSO session.
+
+    A cached session is NOT proof it still works -- only a real read is. Start
+    here to see what can be compared.
+    """
+    return _wrap(sct.systems)
+
+
+@mcp.tool()
+def scout_table_catalog(area: str = "") -> str:
+    """Customizing tables Scout knows about, by area (FI, CO, AA, TAX, BANK, CROSS).
+
+    A convenience list, not a limit: scout_compare accepts any table name.
+    """
+    return _wrap(sct.table_catalog, area)
+
+
+@mcp.tool()
+def scout_read(table: str, system: str, fields: str = "", where: str = "",
+               top: int = 200, order: str = "") -> str:
+    """Read one configuration table from one system (read-only).
+
+    fields/where are passed to the ADT data preview: WHERE is capped near 255
+    chars and ORDER BY ... DESC is rejected by the API -- both are reported
+    rather than silently truncated.
+    """
+    return _wrap(sct.read, table, system, fields, where, top, order)
+
+
+@mcp.tool()
+def scout_compare(table: str, left: str, right: str, key: str = "",
+                  fields: str = "", where: str = "", top: int = 500,
+                  ignore: str = "") -> str:
+    """Compare a configuration table between two systems -- the Customizing Scout diff.
+
+    Rows are matched on the table's real primary key (read from DD03L; MANDT is
+    dropped), then reported as identical, differing (with the field-level
+    deltas), or present on one side only. If the row cap is hit the result says
+    so and is explicitly PARTIAL -- do not read absence of differences past the
+    cap as agreement.
+    """
+    return _wrap(sct.compare, table, left, right, key, fields, where, top, ignore)
+
+
+@mcp.tool()
+def scout_compare_area(area: str, left: str, right: str, top: int = 500) -> str:
+    """Sweep every table in an area and report which ones differ between two systems.
+
+    Use this to find WHERE two systems drifted before spending calls on WHAT
+    drifted; then drill in with scout_compare. Tables that cannot be read are
+    reported per table and do not stop the sweep. This makes two reads per
+    table, so it is slow -- expect tens of seconds per table.
+    """
+    return _wrap(sct.compare_area, area, left, right, top)
 
 if __name__ == "__main__":
     config.require_host()   # fail fast with a clear message if .env isn't configured

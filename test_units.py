@@ -199,6 +199,146 @@ def test_testsuite_update_rejects_unknown_field():
         pass
 
 
+def test_no_mcp_tool_calls_itself():
+    """A tool must not reference its own name in its body.
+
+    server.py imports helpers (`session_status`) and also defines tools with the
+    same name. The def shadows the import, so `_wrap(session_status)` hands the
+    tool to itself and recurses until the process is wedged -- which reads as a
+    hung MCP call, not as an error. Import the helper under an alias instead.
+    """
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse(Path(__file__).with_name("server.py").read_text(encoding="utf-8"))
+
+    def is_tool(node):
+        return isinstance(node, ast.FunctionDef) and any(
+            (isinstance(d, ast.Call) and getattr(d.func, "attr", None) == "tool")
+            or getattr(d, "attr", None) == "tool"
+            for d in node.decorator_list
+        )
+
+    tools = {n.name for n in tree.body if is_tool(n)}
+    offenders = []
+    for node in tree.body:
+        if not is_tool(node):
+            continue
+        for sub in ast.walk(node):
+            # A bare Name that is itself a tool: either self-recursion, or a
+            # helper import shadowed by a tool of the same name. Both wedge.
+            if isinstance(sub, ast.Name) and sub.id in tools:
+                offenders.append(f"{node.name} -> {sub.id} (line {sub.lineno})")
+    assert not offenders, "tool body references a tool name: " + ", ".join(offenders)
+
+
+# --- Customizing Scout (no network) ---------------------------------------
+
+_VSP_BLOCK = (
+    "BUKRS\tBUTXT\tWAERS\n"
+    "--------------------------------------------------------------------------------\n"
+    "0001\tAlpha Manufacturing\tEUR\n"
+    "0002\tBeta Trading\tUSD\n"
+    "\n"
+    "2 rows\n"
+)
+
+
+def test_scout_parses_vsp_query_block():
+    import scout
+    header, rows = scout._parse(_VSP_BLOCK)
+    assert header == ["BUKRS", "BUTXT", "WAERS"]
+    assert len(rows) == 2, rows          # the 'N rows' footer must not become a row
+    assert rows[0] == ["0001", "Alpha Manufacturing", "EUR"]
+
+
+def test_scout_parse_pads_short_rows():
+    """Trailing empty columns must not shift values into the wrong field."""
+    import scout
+    header, rows = scout._parse("A\tB\tC\n---\nx\ty\n\n1 rows\n")
+    assert rows == [["x", "y", ""]]
+
+
+def test_scout_refuses_person_level_tables():
+    import scout
+    for tbl in ("PA0002", "ADRC", "KNA1", "LFA1", "BUT000"):
+        try:
+            scout._check_table(tbl)
+            assert False, f"{tbl} should be refused"
+        except scout.ScoutError as e:
+            assert "person-level" in str(e)
+    assert scout._check_table("t001") == "T001"   # normal customizing still fine
+
+
+def test_scout_rejects_non_table_names():
+    import scout
+    for bad in ("T001; DROP", "T001 OR 1=1", "--", ""):
+        try:
+            scout._check_table(bad)
+            assert False, f"{bad!r} should be refused"
+        except scout.ScoutError:
+            pass
+
+
+def test_scout_fails_closed_without_allowlist():
+    """No SCOUT_SYSTEMS means no system is reachable. This is the production guard."""
+    import os
+    import scout
+    saved = os.environ.pop("SCOUT_SYSTEMS", None)
+    try:
+        try:
+            scout._check_system("anything")
+            assert False, "should refuse when SCOUT_SYSTEMS is unset"
+        except scout.ScoutError as e:
+            assert "SCOUT_SYSTEMS is not set" in str(e)
+    finally:
+        if saved is not None:
+            os.environ["SCOUT_SYSTEMS"] = saved
+
+
+def test_scout_refuses_system_outside_allowlist():
+    import os
+    import scout
+    saved = os.environ.get("SCOUT_SYSTEMS")
+    os.environ["SCOUT_SYSTEMS"] = "dev,qa"
+    try:
+        try:
+            scout._check_system("prd")
+            assert False, "a system outside the allowlist must be refused"
+        except scout.ScoutError as e:
+            assert "not in SCOUT_SYSTEMS" in str(e)
+    finally:
+        if saved is None:
+            os.environ.pop("SCOUT_SYSTEMS", None)
+        else:
+            os.environ["SCOUT_SYSTEMS"] = saved
+
+
+def test_scout_run_refuses_anything_but_query():
+    """_run is the only exec point; it must reject every write-capable subcommand."""
+    import scout
+    for bad in ("deploy", "execute", "install", "transport"):
+        try:
+            scout._run(["vsp", "-s", "dev", bad, "X"])
+            assert False, f"vsp {bad} should be refused"
+        except scout.ScoutError as e:
+            assert "refusing to run" in str(e) or "only run" in str(e)
+
+
+def test_scout_ignores_mandt_by_default():
+    import scout
+    assert "MANDT" in scout.DEFAULT_IGNORE
+
+
+def test_scout_catalog_areas_are_well_formed():
+    import scout
+    assert {"FI", "CO", "AA", "TAX", "BANK"} <= set(scout.CATALOG)
+    for area, tables in scout.CATALOG.items():
+        for tbl, desc in tables:
+            assert tbl == tbl.upper() and desc, (area, tbl)
+            # the catalog must never steer a caller at person-level data
+            assert not tbl.startswith(scout._PERSONAL_PREFIXES), (area, tbl)
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     passed = 0

@@ -140,7 +140,7 @@ once and the cookie is reused:
 > system usually has its ADT node closed — hence the dedicated refresh script
 > that lands on an allowed OData path.
 
-## Tools (60)
+## Tools (73)
 
 | Tool | Purpose |
 |------|---------|
@@ -195,6 +195,86 @@ once and the cookie is reused:
 | `test_lookup(kind)` | folders / status_schemas / statuses / priorities / solutions |
 | **Generic (any object type)** | |
 | `search_workspaces` / `get_workspace` / `list_workspace_actions` / `execute_workspace_action` | Read + lifecycle for every ProcessType (Defect, RfC, Risk, …) |
+
+## Customizing Scout — compare configuration across systems
+
+SAP Solution Manager ships transaction `SCOUT` (Customizing Scout, SV-SMG-IMP):
+it compares customizing between systems connected to SolMan by RFC and set up for
+Customizing Distribution. `scout.py` does the same job over a different road — it
+reads table contents from each system through [`vsp`](https://github.com/oisee/vibing-steampunk)'s
+`query` command, which uses the standard ADT data-preview API.
+
+No RFC destination, no Customizing Distribution setup, no SolMan-side
+authorization — and it works on systems SolMan has never been told about. (SCOUT
+is a classic ABAP/Web Dynpro tool with no OData service, so the SALM services
+this server otherwise speaks cannot reach it.)
+
+| Tool | What it does |
+|---|---|
+| `scout_systems` | Systems Scout may read, and whether each has a cached SSO session |
+| `scout_table_catalog` | Known customizing tables by area — FI, CO, AA, TAX, BANK, CROSS |
+| `scout_read` | Read one configuration table from one system |
+| `scout_compare` | Diff one table between two systems, field by field |
+| `scout_compare_area` | Sweep an area to find *where* two systems drifted |
+
+Typical use: `scout_compare_area` to find which tables differ, then
+`scout_compare` on the interesting ones for field-level detail.
+
+### Setup
+
+Requires `vsp` on the machine with a system profile in `~/.vsp.json`. Then, in
+`.env`:
+
+```ini
+SCOUT_SYSTEMS=dev,qa        # systems Scout may READ. Never list production.
+```
+
+**Scout fails closed.** With `SCOUT_SYSTEMS` unset, every call refuses. That is
+stronger than blocking known production SIDs: production cannot be reached by
+forgetting to add it to a denylist, only by deliberately typing it into the
+allowlist.
+
+### What it will not do
+
+- **Write.** `_run` is the only exec point and permits only `vsp query`, which has
+  no write mode. Write-capable subcommands are refused by name.
+- **Read person-level tables** (`PA0*`, `ADRC`, `KNA1`, `LFA1`, `BUT000` …) — not
+  configuration, and a diff copies them somewhere new. Lift deliberately with
+  `SCOUT_ALLOW_PERSONAL_DATA=1`.
+- **Wait on a browser.** See the caveat below.
+
+### Read this before trusting an all-clear
+
+Rows are matched on the table's **real primary key**, read from `DD03L` rather
+than guessed, with `MANDT` dropped. If that key is not unique in the result, the
+comparison refuses instead of silently dropping colliding rows.
+
+**A truncated comparison is never reported as agreement.** Both sides are ordered
+by the key (without that, two systems which both hit the row cap can return
+*different* rows, so the diff reports artifacts of row order), and a capped result
+carries `conclusive: false` plus an explicit `INCONCLUSIVE` warning.
+`scout_compare_area` counts those separately from `identical`.
+
+This matters more than it sounds. In testing, a sweep with a 300-row cap reported
+`T093` as **`differs=False`**. The same table at a cap of 4000: **452 rows vs 479,
+15 differing, 42 present on one side only.** The first answer was a clean bill of
+health for a table that had drifted badly. If a result says `inconclusive`, raise
+`top` or narrow with `where` before drawing any conclusion.
+
+### The browser caveat
+
+When a cached SSO session goes stale, `vsp` tries a silent refresh; if that needs
+a human it opens a browser window and waits five minutes. Two things that look
+like they prevent this **do not** — both verified against vsp v2.54.0:
+
+- `--sso-on-expiry error` is a *server-mode* flag; CLI subcommands reject it
+  (`Error: unknown flag: --sso-on-expiry`).
+- The `on_expiry` key in `.vsp.json` is ignored — a system with
+  `on_expiry: "error"` still opened a window.
+
+So Scout cannot prevent the window. It refuses to wait instead: `SCOUT_TIMEOUT`
+(default 120s) kills the call, and vsp's browser marker becomes an error naming
+the fix. Keep sessions warm out of band with `vsp sso refresh -s <sid>`.
 
 ## Coverage (toward full browser parity)
 
