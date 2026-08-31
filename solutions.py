@@ -136,3 +136,77 @@ def solution_overview(solution: str) -> dict:
                          lambda bid=b["branch_id"]: soldoc.list_scopes(bid))
         branches.append({**b, "scopes": scopes})
     return {**sol, "branches": branches}
+
+
+# --------------------------------------------------------------------------
+# Projects / releases
+#
+# Where SEVERAL RELEASES RUN CONCURRENTLY there is no such thing as "the" planned
+# project. A site may publish dozens, often as parallel families (one per
+# landscape) each split further by value stream.
+#
+# v1 pinned one in .env and used it as a silent default for every write. That is
+# the same failure shape as the solution-id trap: work quietly filed against the
+# wrong release. v2 resolves projects BY NAME with the same rules as solutions
+# (exact id > exact name > unique substring > loud ambiguity error), so a caller
+# names the release it means and a near-miss raises instead of guessing.
+# --------------------------------------------------------------------------
+
+def list_projects() -> list[dict]:
+    """Every planned project on the system. Cached — the list changes rarely."""
+    def load():
+        with SolmanClient(service=config.SVC_BIZ_REQ) as c:
+            rows = c.results("WPPROJECTSet", {"$top": "500"})
+        out = []
+        for r in rows:
+            pid = r.get("ProjectId")
+            if not pid:
+                continue
+            out.append({
+                "project_id": pid,
+                "project_guid": r.get("ProjectGuid"),
+                "description": r.get("Description") or pid,
+            })
+        out.sort(key=lambda x: x["project_id"])
+        return out
+    return _cached("projects", load)
+
+
+def resolve_project(query: str) -> dict:
+    """Resolve a project by id, exact name, or unique substring.
+
+    Raises on ambiguity rather than picking one — with several concurrent
+    releases live, a partial name like "REL_12" can match more than one, and
+    silently choosing would file work against the wrong release.
+    """
+    q = (query or "").strip()
+    if not q:
+        raise config.ConfigError(
+            "No project given. Releases run concurrently, so there is "
+            "no default. Name the release explicitly — list_projects() shows the "
+            f"{len(list_projects())} available."
+        )
+    rows = list_projects()
+    # Match on project_id first, then fall back to description. Only fall back on
+    # "no match" -- an AMBIGUOUS id must propagate as-is. Retrying an ambiguous
+    # query against a different field just yields a second, unrelated ambiguity
+    # error and buries the real one.
+    try:
+        return _match(q, rows, "project_id", "project_id", "project")
+    except ValueError as first:
+        if "ambiguous" in str(first):
+            raise
+        return _match(q, rows, "project_id", "description", "project")
+
+
+def require_project(query: str = "") -> dict:
+    """Project for a write: the explicit argument, else the .env convenience value."""
+    if query:
+        return resolve_project(query)
+    fallback = config.DEFAULT_PLANNED_PROJECT
+    if fallback:
+        return resolve_project(fallback)
+    raise config.ConfigError(
+        "No project specified and SOLMAN_PLANNED_PROJECT is not set. Pass "
+        "project='<release>' — list_projects() shows what is available."
+    )

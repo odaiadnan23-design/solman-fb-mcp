@@ -14,3 +14,7 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Site-specific notes: real hostnames, solution GUIDs, release names and
+# measured permission grants. This repository is PUBLIC — these stay local.
+NOTES_LOCAL_GORE.md

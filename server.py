@@ -10,19 +10,23 @@ from __future__ import annotations
 
 import json
 
-from mcp.server.fastmcp import FastMCP
+# mcp 2.x renamed FastMCP -> MCPServer. requirements.txt previously said
+# `mcp>=1.27`, unpinned, so pip resolved 2.x and the v1 import broke the build.
+# v2 targets the 2.x API and pins the major range.
+from mcp.server.mcpserver import MCPServer
 
 import attachments as att
 import config
 import requirements as rq
 import soldoc as sd
 import solutions as sol
+import sqlcache as sqc
 import testsuite as tst
 import workpackages as wp
 import workspaces as wsp
 from client import SessionExpired, SolmanError, session_status
 
-mcp = FastMCP("solman-fb")
+mcp = MCPServer("solman-fb")
 
 
 def _branch_for(solution: str, branch_id: str) -> str | None:
@@ -251,6 +255,84 @@ def detach_element(requirement_guid: str, element_id: str, branch_id: str = "") 
 def list_lookup(kind: str = "priorities", top: int = 50) -> str:
     """List reference values. kind: solutions|priorities|classifications|categories|statuses|projects."""
     return _wrap(rq.lookup, kind, top)
+
+
+@mcp.tool()
+def session_keepalive() -> str:
+    """Touch the SolMan session so its server-side idle timer resets.
+
+    Addresses the "Future: a periodic keepalive ping" note in the README. The
+    client already auto-reloads the cookie when refresh_session.py rewrites it
+    (it watches the file mtime), so the remaining friction is purely the
+    server-side idle timeout. One cheap authenticated GET resets it.
+
+    Call this on a timer from the client, or before a long batch, to avoid
+    hitting SESSION EXPIRED mid-run. It cannot create a session -- if the
+    session is already gone this reports that, and refresh_session.py is still
+    the out-of-band way back in.
+    """
+    return _wrap(session_status)
+
+
+@mcp.tool()
+def sql_cache_status() -> str:
+    """Health and STALENESS of the companion application's SQL cache.
+
+    Ask before trusting a read: the cache is maintained by that other application,
+    not by this server, so it can lag. Reports row counts and last sync time.
+    """
+    return _wrap(sqc.status)
+
+
+@mcp.tool()
+def sql_defect_search(text: str, top: int = 50) -> str:
+    """Search cached defects by substring — with filtering that actually works.
+
+    The SALM gateway silently DROPS most $filter predicates and miscounts
+    $count; this queries SQL Server directly, so predicates and counts are real.
+    READ-ONLY: non-SELECT statements are refused before reaching the driver.
+    """
+    return _wrap(sqc.defect_search, text, top)
+
+
+@mcp.tool()
+def sql_defect_summary() -> str:
+    """Defect counts per project from the SQL cache (honest counts)."""
+    return _wrap(sqc.defect_summary)
+
+
+@mcp.tool()
+def sql_defect_by_value_stream() -> str:
+    """Defect counts by value stream and status — a query the gateway cannot answer."""
+    return _wrap(sqc.defect_by_value_stream)
+
+
+@mcp.tool()
+def sql_table_inventory() -> str:
+    """What the SQL cache holds, with row counts, to decide what is worth querying."""
+    return _wrap(sqc.table_inventory)
+
+
+@mcp.tool()
+def list_projects() -> str:
+    """List every planned project / release on the system.
+
+    Where several releases run concurrently there is no default project. Sites
+    commonly publish parallel release families (one per landscape), each split
+    further by value stream.
+    """
+    return _wrap(sol.list_projects)
+
+
+@mcp.tool()
+def resolve_project(project: str) -> str:
+    """Resolve a release NAME (or id, or unique substring) to its id and GUID.
+
+    Matching: exact id > exact name > unique substring. Ambiguity RAISES and
+    lists the candidates rather than picking one -- with concurrent releases,
+    silently choosing would file work against the wrong release.
+    """
+    return _wrap(sol.resolve_project, project)
 
 
 @mcp.tool()

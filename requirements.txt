@@ -1,5 +1,10 @@
 # Runtime (MCP server): mcp + httpx
-mcp>=1.27
-httpx>=0.28
+mcp>=2.1,<3
+httpx>=0.28,<1
+# TLS via the OS trust store: PM1 chains to a Gore-internal CA that Windows
+# trusts and certifi does not, so verify=True alone fails on this network.
+truststore>=0.10,<1
 # Cookie refresh only (browser SSO): Playwright (uses installed Edge via channel="msedge")
-playwright>=1.61
+playwright>=1.61,<2
+# Optional: read-only access to a companion application's SQL cache (Windows SSO)
+pyodbc>=5.3,<6
