@@ -103,6 +103,22 @@ BASE_URL = f"https://{SAP_HOST}:{SAP_PORT}"
 SVC_BIZ_REQ = "/sap/opu/odata/salm/BUSINESS_REQUIREMENTS_SRV"   # PRIMARY: create/manage requirements
 SVC_SOLDOC = "/sap/opu/odata/salm/soldoc_node_selection_srv"    # Solution Documentation tree
 SVC_GENERIC = "/sap/opu/odata/salm/CRM_GENERIC_SRV"             # requirement search list / lookups
+
+# The page the interactive sign-in is driven from. This is NOT the same as the
+# endpoint used to verify the session afterwards, and the difference matters.
+#
+# Navigating to an OData `$metadata` URL does not reliably present the IAS login
+# flow: the browser lands on something that never gives the user a usable sign-in,
+# so the refresh sits until it times out while looking like it is working.
+# Measured 2026-08-31: a refresh against the $metadata URL timed out repeatedly;
+# the same session signed in immediately once the Fiori launchpad shell was opened
+# by hand. The launchpad is a real UI and drives the SAML/IAS redirect properly.
+#
+# Same lesson as vsp's --sso-trigger-url: an authentication-gated URL is not
+# automatically a usable login page. Verify with the API, log in through the UI.
+LOGIN_URL = os.environ.get("SOLMAN_LOGIN_URL", "") or (
+    f"{BASE_URL}/sap/bc/ui2/flp?sap-client={SAP_CLIENT}#Shell-home"
+)
 SVC_SERVICE = "/sap/opu/odata/salm/CRM_SERVICE_SRV"
 SVC_DROP_DOC = "/sap/opu/odata/SALM/DROP_DOC_SRV"
 

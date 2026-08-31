@@ -30,9 +30,23 @@ import config
 
 
 def _probe_url() -> str:
-    # An allowed, cheap, authenticated GET. If this returns edmx XML we know the
-    # SAML assertion has been consumed and the SAP session cookie exists.
+    # VERIFICATION target. An allowed, cheap, authenticated GET: if this returns
+    # edmx XML the SAML assertion has been consumed and the session works for the
+    # calls this server actually makes. Do not navigate the browser here -- see
+    # _login_url below.
     return f"{config.BASE_URL}{config.SVC_GENERIC}/$metadata?sap-client={config.SAP_CLIENT}"
+
+
+def _login_url() -> str:
+    """LOGIN target -- where the human actually signs in.
+
+    Deliberately different from the probe. Navigating to the OData `$metadata`
+    URL does not reliably present the IAS login flow, so the window sits there
+    never offering a sign-in and the refresh times out looking like it is
+    working. The Fiori launchpad shell drives the SAML/IAS redirect properly.
+    Override with SOLMAN_LOGIN_URL.
+    """
+    return config.LOGIN_URL
 
 
 def _session_cookie_present(cookies: list[dict]) -> bool:
@@ -73,7 +87,9 @@ def _write_netscape(cookies: list[dict], path) -> int:
 def refresh(timeout_s: int, headless: bool) -> int:
     config.EDGE_PROFILE.mkdir(parents=True, exist_ok=True)
     probe = _probe_url()
+    login = _login_url()
     print(f"[refresh] target : {config.BASE_URL} (client {config.SAP_CLIENT})")
+    print(f"[refresh] login  : {login}")
     print(f"[refresh] profile: {config.EDGE_PROFILE}")
     print(f"[refresh] cookie : {config.COOKIE_FILE}")
 
@@ -87,9 +103,10 @@ def refresh(timeout_s: int, headless: bool) -> int:
         )
         try:
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
-            print("[refresh] navigating; complete the IAS login if prompted...")
+            print("[refresh] opening the launchpad; SIGN IN in the browser window "
+                  "that just opened...")
             try:
-                page.goto(probe, wait_until="domcontentloaded", timeout=60_000)
+                page.goto(login, wait_until="domcontentloaded", timeout=60_000)
             except Exception as exc:  # noqa: BLE001 - navigation may bounce through IdP
                 print(f"[refresh] initial nav note: {exc}")
 
