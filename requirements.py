@@ -92,7 +92,7 @@ def list_requirements(solution: str = "", branch_id: str = "", status: str = "",
     `query` (title substring) is applied server-side; `status` ('Approved' or
     'E0003') and branch are filtered client-side from the search rows; `owner`
     / `project` / `priority` require hydrating each candidate (extra read per
-    row, capped by `scan`). solution accepts a name/id ("P1M").
+    row, capped by `scan`). solution accepts a name/id ("PRD").
     """
     if solution and not branch_id:
         import solutions as _sol
@@ -175,7 +175,7 @@ def search_solution_elements(query: str, branch_id: str = "", top: int = 15,
                              solution: str = "") -> list[dict]:
     """Search Solution Documentation elements by name substring within a branch.
 
-    `solution` accepts a solution name/id ("P1M") — its Design branch is used.
+    `solution` accepts a solution name/id ("PRD") — its Design branch is used.
     """
     if solution and not branch_id:
         import solutions as _sol
@@ -215,7 +215,7 @@ def create_requirement(
     """Create a requirement. Returns {RequirementId, RequirementGuid, ...}.
 
     `priority`: '1'|'2'|'3'. `classification`: fit|gap|wricef|non-functional.
-    `solution` accepts a solution NAME or id ("P1M", "S4P", ...) — the branch is
+    `solution` accepts a solution NAME or id ("PRD", "QAS", ...) — the branch is
     resolved automatically (Design) and `scope_id` may then be a scope NAME too
     ("Release 5"). Without `solution`, env defaults apply (see DEFAULTS).
     If `element_id` is given, the Solution element is attached after create under
@@ -401,7 +401,7 @@ def attach_element(requirement_guid: str, element_id: str, branch_id: str | None
                    scope_id: str = "SAP_DEFAULT_SCOPE", solution: str = "") -> dict:
     """Attach a Solution Documentation element to a requirement (verified).
 
-    `solution` accepts a name/id ("P1M"); `scope_id` may then be a scope NAME
+    `solution` accepts a name/id ("PRD"); `scope_id` may then be a scope NAME
     ("Release 5") — both are resolved to ids on the right branch. Re-running with
     a new scope UPDATES the existing link in place (no duplicate row).
     """

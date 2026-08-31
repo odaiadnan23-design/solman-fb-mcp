@@ -1,7 +1,7 @@
 """Solution / branch / scope resolution by NAME or id — the multi-solution layer.
 
 A SolMan system hosts several solutions (each with branches, each branch with
-scopes). Tools accept friendly names ("P1M", "Design", "Release 5") and this
+scopes). Tools accept friendly names ("PRD", "Design", "Release 5") and this
 module resolves them to ids, with caching and loud ambiguity errors.
 
 Matching rules (case-insensitive):
@@ -76,7 +76,7 @@ def list_branches(solution_id: str) -> list[dict]:
 
 
 def resolve_solution(name_or_id: str) -> dict:
-    """'P1M' / 'S4P' / full name / id -> {'solution_id', 'name'}."""
+    """'PRD' / 'QAS' / full name / id -> {'solution_id', 'name'}."""
     return _match(name_or_id, list_solutions(), "solution_id", "name", "solution")
 
 

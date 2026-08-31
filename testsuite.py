@@ -100,7 +100,7 @@ def where_used(case_id: str, version: int = 1, lang: str = "") -> dict:
 def list_test_plans(solution: str = "", query: str = "", top: int = 50) -> list[dict]:
     """List test plans for a solution (TM_DASH requires a SolutionId).
 
-    `solution` accepts a name/id ("P1M"); defaults to the configured solution.
+    `solution` accepts a name/id ("PRD"); defaults to the configured solution.
     `query` filters TplnId/description client-side.
     """
     sid = _solution_id(solution)
