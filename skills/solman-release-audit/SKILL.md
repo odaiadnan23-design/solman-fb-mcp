@@ -65,8 +65,11 @@ single-WRICEF package for an interface that already had one. A requirement-drive
 can only ever find packages that have a requirement, which is exactly the wrong blind spot for
 an audit whose job is finding packages that do not.
 
-Note `RFC_READ_TABLE` truncates a RAW(16) GUID to 16 hex characters and that prefix is shared
-across documents, so join on `OBJECT_ID`, and take full GUIDs from OData.
+`rfc.read_table` requests the `ET_DATA` return path, so RAW GUIDs come back whole and
+`CRMD_ORDERADM_H` resolves any id to its GUID directly (the classic return truncates
+them to 16 characters — if you see that, the joins are suspect). The MCP tools
+`find_documents` and `release_inventory` wrap this; `describe_document` reads any
+resulting object in full, including status history.
 
 From the requirement rows the script follows `WpId` / `WpGuid` to the work packages, which is
 the one reliable requirement→work-package link. Work packages with no requirement at all are

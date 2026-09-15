@@ -438,3 +438,89 @@ def detach_element(requirement_guid: str, element_id: str, branch_id: str | None
         still = any(e.get("ElementId") == element_id
                     for e in c.results(f"REQUIREMENTSet(WpGuid='',RequirementGuid='{g}')/REQELEMENTSet"))
     return {"guid": g, "element_detached": element_id, "removed": not still}
+
+
+# --------------------------------------------------------------------------
+# Requirement <-> Work Package assignment (BUSINESS_REQUIREMENTS_SRV imports)
+# --------------------------------------------------------------------------
+def authorized_actions() -> list[dict]:
+    """What this user may do in Requirements Management — get_authorized_actions.
+    Read-only. On the Gore system all eight came back authorized, including
+    UNASSIGN_WP_FROM_REQ and ASSIGN_EXISTING_WP."""
+    rows = client_for(config.SVC_BIZ_REQ).function("get_authorized_actions", {})
+    d = rows.get("d", rows)
+    rows = d.get("results", d) if isinstance(d, dict) else d
+    return [{"code": r.get("Code"), "description": r.get("Description"),
+             "authorized": bool(r.get("Authorized"))} for r in rows]
+
+
+def _req_wp_data(requirement_guid: str, work_package_guid: str) -> str:
+    """The reqWpData payload the (un)assignment imports take. Verified against
+    checkWpUnassignmentFromRequirement: every shape below is accepted without
+    error and returns no objection; the JSON object form is what the Fiori app
+    sends, so that is the one used."""
+    import json as _json
+    return _json.dumps({"RequirementGuid": _dash(requirement_guid).replace("-", "").upper(),
+                        "WpGuid": _dash(work_package_guid).replace("-", "").upper()})
+
+
+def check_unassign_work_package(requirement_guid: str, work_package_guid: str) -> dict:
+    """Ask whether a requirement may be unassigned from a work package (read-only).
+    An empty message list means no objection."""
+    c = client_for(config.SVC_BIZ_REQ)
+    r = c.function("checkWpUnassignmentFromRequirement",
+                   {"reqWpData": _req_wp_data(requirement_guid, work_package_guid)})
+    d = r.get("d", r)
+    msgs = d.get("results", d) if isinstance(d, dict) else d
+    msgs = msgs if isinstance(msgs, list) else [msgs]
+    msgs = [m for m in msgs if isinstance(m, dict) and any(v for k, v in m.items() if k != "__metadata")]
+    return {"allowed": not msgs, "messages": msgs}
+
+
+def unassign_work_package(requirement_guid: str, work_package_guid: str,
+                          force: bool = False) -> dict:
+    """Unassign ONE work package from a requirement — wpUnassignmentFromRequirement.
+
+    This is the API form of the Fiori unassign, with one crucial difference in
+    intent: Fiori's unassign clears EVERY work-package link on the requirement and
+    resets its status; this import targets one pair. It is a POST-only import
+    (calling it with GET returns a misleading 404 — the first attempt did exactly
+    that), so it goes through client.function_post: journalled, kill-switchable.
+
+    Runs the check first and refuses if the system objects, unless force=True.
+    Verifies afterwards by re-reading the requirement's work packages.
+
+    STATUS: implemented and reachable, but NOT yet exercised against a live pair —
+    every candidate pair on 16-Sep-2026 was a link somebody wanted kept. Treat the
+    first real call as a test: pick a pair you would re-create if it misbehaved.
+    """
+    check = check_unassign_work_package(requirement_guid, work_package_guid)
+    if not check["allowed"] and not force:
+        return {"unassigned": False, "reason": "system objected", **check}
+    c = client_for(config.SVC_BIZ_REQ)
+    resp = c.function_post("wpUnassignmentFromRequirement",
+                           {"reqWpData": _req_wp_data(requirement_guid, work_package_guid)})
+    rg = _dash(requirement_guid)
+    after = c.results("REQUIREMENTSet", {"$filter": f"RequirementGuid eq guid'{rg}'"})
+    still = [x.get("WpId") for x in after if x.get("WpId")]
+    wp_id = _work_package_id(work_package_guid)
+    return {"unassigned": wp_id not in still if wp_id else None, "work_package": wp_id,
+            "remaining_work_packages": still, "response": resp.get("d", resp)}
+
+
+def assign_existing_work_package(requirement_guid: str, work_package_guid: str) -> dict:
+    """Assign an already-existing work package to a requirement — Assign_Existing_Wp.
+    Same outcome as workpackages.assign_work_package (which uses Assign_Requirement on
+    the other service); kept because this is the import the authorization list names.
+    Requirement must be Approved and the work package in Scoping."""
+    c = client_for(config.SVC_BIZ_REQ)
+    wg = _dash(work_package_guid).replace("-", "").upper()
+    resp = c.function("Assign_Existing_Wp", {"WpGuid": wg})
+    import workpackages as _wp
+    return {"assigned": _wp.link_verified(wg, _dash(requirement_guid)), "response": resp.get("d", resp)}
+
+
+def _work_package_id(work_package_guid: str) -> str | None:
+    import workspaces as _ws
+    hdr = _ws.get_workspace(work_package_guid, "S1IT")
+    return hdr.get("ObjectId") if hdr else None

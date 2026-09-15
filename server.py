@@ -17,6 +17,7 @@ from mcp.server.mcpserver import MCPServer
 
 import attachments as att
 import config
+import documents as docs
 import hardening
 import rfc
 import requirements as rq
@@ -850,6 +851,120 @@ def rfc_probe() -> str:
     Availability and authorisation are separate: the endpoint can be open while
     S_RFC withholds a given function group."""
     return _wrap(rfc.probe)
+
+
+
+# ==========================================================================
+# Any document, any type — Focused Build and ChaRM
+# ==========================================================================
+@mcp.tool()
+def describe_document(ref: str, process_type: str = "", include_history: bool = True,
+                      include_flow: bool = True) -> str:
+    """Everything about ONE document of ANY type, by ObjectId or GUID: header and status,
+    partners with names, related documents (requirement<->WP, WP<->work item,
+    defect<->correction, RFC<->change), work items, transports, test cases, available
+    lifecycle actions, text notes (id/size/author), full STATUS HISTORY (who moved it,
+    when — OData has none of this) and resolved document flow.
+
+    Works identically for requirements, work packages, work items, defects, defect
+    corrections, test requests, and ChaRM requests for change, normal/urgent changes,
+    incidents and problems. Pass process_type when you know it to save a lookup.
+    Turn off history/flow for speed on bulk reads."""
+    return _wrap(docs.describe, ref, process_type, include_history, include_flow)
+
+
+@mcp.tool()
+def document_status_history(ref: str, process_type: str = "") -> str:
+    """Who moved a document through which statuses and when, oldest first.
+    The only source for this — the OData layer holds current status only."""
+    def _run():
+        hdr = docs._resolve(ref, process_type)
+        return docs.status_history(hdr["Guid"], hdr["ProcessType"])
+    return _wrap(_run)
+
+
+@mcp.tool()
+def document_actions(ref: str, process_type: str = "") -> str:
+    """Lifecycle actions available right now on any document (feed one to
+    execute_workspace_action)."""
+    return _wrap(docs.actions, ref, process_type)
+
+
+@mcp.tool()
+def resolve_guids(guids: list[str]) -> str:
+    """Full 32-character document GUIDs -> id, type and description."""
+    return _wrap(rfc.resolve_guids, guids)
+
+
+# ==========================================================================
+# Requirement <-> work package assignment
+# ==========================================================================
+@mcp.tool()
+def requirement_authorized_actions() -> str:
+    """What this user may do in Requirements Management (create, assign/unassign
+    structure, create/assign/unassign work package…). Read-only."""
+    return _wrap(rq.authorized_actions)
+
+
+@mcp.tool()
+def check_unassign_work_package(requirement_guid: str, work_package_guid: str) -> str:
+    """Ask the system whether ONE work package may be unassigned from a requirement.
+    Read-only; an empty message list means no objection."""
+    return _wrap(rq.check_unassign_work_package, requirement_guid, work_package_guid)
+
+
+@mcp.tool()
+def unassign_work_package(requirement_guid: str, work_package_guid: str,
+                          force: bool = False) -> str:
+    """Unassign ONE work package from a requirement (wpUnassignmentFromRequirement, POST).
+
+    Unlike the Fiori unassign, which clears EVERY work-package link on the requirement
+    and resets its status, this targets a single pair. Runs the check first and refuses
+    on objection unless force=True; verifies by re-reading the requirement afterwards.
+    Journalled; blocked by SOLMAN_READONLY.
+
+    NOT YET EXERCISED LIVE — implemented and reachable, but every candidate pair on
+    16-Sep-2026 was a link someone wanted kept. Treat the first real call as a test on
+    a pair you could re-create."""
+    return _wrap(rq.unassign_work_package, requirement_guid, work_package_guid, force)
+
+
+@mcp.tool()
+def assign_existing_work_package(requirement_guid: str, work_package_guid: str) -> str:
+    """Assign an existing work package to a requirement (Assign_Existing_Wp). Requirement
+    must be Approved and the work package in Scoping. Verified via the WP's related
+    transactions afterwards."""
+    return _wrap(rq.assign_existing_work_package, requirement_guid, work_package_guid)
+
+
+# ==========================================================================
+# System, people, function discovery
+# ==========================================================================
+@mcp.tool()
+def system_info() -> str:
+    """SID, host, database and release of the connected system (RFC_SYSTEM_INFO)."""
+    return _wrap(rfc.system_info)
+
+
+@mcp.tool()
+def user_detail(user_id: str) -> str:
+    """Resolve an SAP user id (as seen in CreatedBy, text authors, status history) to a
+    person: name, email, department (BAPI_USER_GET_DETAIL)."""
+    return _wrap(rfc.user_detail, user_id)
+
+
+@mcp.tool()
+def rfc_function_search(pattern: str, group: str = "*") -> str:
+    """Find RFC-enabled function modules by name pattern, e.g. "*READ_TABLE*".
+    Discovery only — whether you may CALL one is a separate S_RFC question; the
+    transport's allowlist holds the ones proven callable here."""
+    return _wrap(rfc.function_search, pattern, group)
+
+
+@mcp.tool()
+def rfc_function_interface(function_module: str) -> str:
+    """Import/export/table parameters of a function module (RFC_GET_FUNCTION_INTERFACE)."""
+    return _wrap(rfc.function_interface, function_module)
 
 
 if __name__ == "__main__":

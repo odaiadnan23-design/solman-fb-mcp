@@ -285,6 +285,36 @@ class SolmanClient:
             raise SolmanError(f"FUNCTION {name} -> {r.status_code}: {_sap_error_message(r)}")
         return r.json()
 
+    def function_post(self, name: str, str_params: dict | None = None,
+                      body: dict | None = None) -> dict:
+        """Call a FunctionImport declared with m:HttpMethod="POST".
+
+        OData v2 puts the parameters in the query string even for POST and sends
+        an empty (or JSON) body. Several SALM imports are POST-only —
+        wpUnassignmentFromRequirement, DiagramAssignStructures,
+        ScopeExtensionChanges — and calling them with GET returns a misleading
+        404, which is what happened the first time round.
+
+        Always treated as a write: guarded by SOLMAN_READONLY and journalled.
+        """
+        hardening.guard_write("FUNCTION(POST)", name)
+        token = self._ensure_csrf()
+        q: dict = {"$format": "json"}
+        for k, v in (str_params or {}).items():
+            q[k] = f"'{odata_literal(v)}'" if isinstance(v, str) else v
+        r = self._retry_csrf(lambda t: _retry_io(lambda: self._http.post(
+            f"{self.service}/{name}", params=q,
+            headers={"X-CSRF-Token": t, "Content-Type": "application/json",
+                     "Accept": "application/json"},
+            content=json.dumps(body or {}).encode("utf-8")), _RETRIABLE_WRITE), token)
+        self._raise_for_auth(r)
+        hardening.journal("FUNCTION(POST)", self.service, name,
+                          {"params": str_params, "body": body}, status=r.status_code,
+                          error=None if r.status_code < 400 else _sap_error_message(r))
+        if r.status_code >= 400:
+            raise SolmanError(f"FUNCTION(POST) {name} -> {r.status_code}: {_sap_error_message(r)}")
+        return r.json() if r.content else {}
+
     def _retry_csrf(self, call, token: str) -> httpx.Response:
         """Run call(token); if CSRF token went stale (403 + 'Required'), refetch once."""
         r = call(token)

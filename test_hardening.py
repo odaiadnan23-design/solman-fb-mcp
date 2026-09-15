@@ -97,8 +97,9 @@ raises("implausible table rejected",
        lambda: rfc.read_table("not a table!", ["X"]), ValueError)
 raises("FM off the allowlist rejected",
        lambda: rfc._call("SAVE_TEXT", ""), ValueError)
-check("allowlist holds only readers",
-      sorted(rfc._ALLOWED), ["RFC_GET_FUNCTION_INTERFACE", "RFC_PING", "RFC_READ_TABLE"])
+check("allowlist holds the nine proven readers", len(rfc._ALLOWED), 9)
+check("allowlist has no writer", not any(w in fm for fm in rfc._ALLOWED
+      for w in ("SAVE", "CREATE", "CHANGE", "DELETE", "MODIFY", "UPDATE", "POST")), True)
 
 print("rfc: response unescaping")
 check("ampersand entity", rfc._unescape("W.L. Gore &#38; Associates"),
@@ -153,7 +154,50 @@ check("odata_literal doubles quotes", client.odata_literal("Jake's node"), "Jake
 
 # --------------------------------------------------------------------------
 print()
+
+
+# --------------------------------------------------------------------------
+# appended 16-Sep: RFC response parsing and document id handling (offline)
+# --------------------------------------------------------------------------
+def _late_checks():
+    print("rfc: response parsing prefers ET_DATA and keeps full GUIDs")
+    et = ("<FIELDS><item><FIELDNAME>GUID</FIELDNAME></item><item><FIELDNAME>OBJECT_ID</FIELDNAME></item></FIELDS>"
+          "<ET_DATA><item><LINE>DBBD843BAFA21FD1A0919903A11BDCE5|2000007100</LINE></item></ET_DATA>"
+          "<DATA><item><WA>DBBD843BAFA21FD1|2000007100</WA></item></DATA>")
+    rows = rfc._parse_rows(et, ["GUID", "OBJECT_ID"])
+    check("one row parsed", len(rows), 1)
+    check("full 32-char GUID from ET_DATA", rows[0]["GUID"], "DBBD843BAFA21FD1A0919903A11BDCE5")
+    check("object id column", rows[0]["OBJECT_ID"], "2000007100")
+    wa_only = "<FIELDS><item><FIELDNAME>MANDT</FIELDNAME></item></FIELDS><DATA><item><WA>100</WA></item></DATA>"
+    check("WA fallback when no ET_DATA", rfc._parse_rows(wa_only, ["MANDT"])[0]["MANDT"], "100")
+    check("echoed FIELDS win over caller order",
+          rfc._parse_rows(et, ["OBJECT_ID", "GUID"])[0]["OBJECT_ID"], "2000007100")
+    check("entities unescaped in cells",
+          rfc._parse_rows("<ET_DATA><item><LINE>W.L. Gore &#38; Associates</LINE></item></ET_DATA>", ["X"])[0]["X"],
+          "W.L. Gore & Associates")
+    check("read_table requests ET_DATA", "USE_ET_DATA_4_RETURN" in open(rfc.__file__, encoding="utf-8").read(), True)
+
+    print("documents: id/guid handling")
+    import documents
+    check("dashed guid normalised", documents._nodash("dbbd843b-afa2-1fd1-ac88-45e443b68df0"),
+          "DBBD843BAFA21FD1AC8845E443B68DF0")
+    check("guid regex accepts 32 hex", bool(documents._GUID_RE.match("DBBD843BAFA21FD1AC8845E443B68DF0")), True)
+    check("guid regex rejects an object id", bool(documents._GUID_RE.match("2000007715")), False)
+    check("system status names", documents._system_status("I1002"), "Open")
+    check("unknown system status passes through", documents._system_status("I9999"), "I9999")
+
+    print("hardening: POST function imports are guarded")
+    import client, inspect
+    src = inspect.getsource(client.SolmanClient.function_post)
+    check("function_post calls guard_write", "guard_write" in src, True)
+    check("function_post journals", "journal(" in src, True)
+    check("rfc allowlist is readers only",
+          all(not any(w in fm for w in ("SAVE", "CREATE", "CHANGE", "DELETE", "MODIFY", "UPDATE"))
+              for fm in rfc._ALLOWED), True)
+
+
+_late_checks()
 if FAILED:
     print(f"{len(FAILED)} FAILED: {', '.join(FAILED)}")
     sys.exit(1)
-print("all offline hardening tests passed")
+print("late checks passed")
