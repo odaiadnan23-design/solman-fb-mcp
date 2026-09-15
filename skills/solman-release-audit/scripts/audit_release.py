@@ -192,6 +192,11 @@ def read_work_packages(wp_guids, verbose=True):
                     scope_wids.add(m.group(1).upper().replace(" ", ""))
                 if (d["type"] or "").upper() in IFACE_TYPES:
                     ifaces += 1
+        declared = set()
+        for text in [rec["description"]] + [i["description"] or "" for i in items]:
+            for m in WRICEF_ANY.finditer(text or ""):
+                declared.add(m.group(1).upper().replace(" ", ""))
+        rec["declared_wids"] = sorted(declared)
         rec["scope_wids"] = sorted(scope_wids)
         rec["scope_ifaces"] = ifaces
         rec["scope_readable"] = rec["status"] not in SCOPE_FROZEN
@@ -273,6 +278,10 @@ def evaluate(REQ, WP, expected_scope=None):
             unticked = [i for i in w["items"] if i["n_docs"] and i["n_checked"] < i["n_docs"]]
             if unticked:
                 f.append(f"{len(unticked)} work item(s) with unticked scope documents")
+            misdeclared = [x for x in w.get("declared_wids", []) if x not in w["wids"]]
+            if misdeclared and w["reqs"]:
+                f.append("declares " + ", ".join(misdeclared) + " but its requirement carries "
+                         + (", ".join(w["wids"]) if w["wids"] else "no WRICEF"))
             if w["wids"] and w["n_gc"] and not w["n_nc"]:
                 f.append("WRICEF on a General Change only — a GC carries no transport")
         w["findings"] = f

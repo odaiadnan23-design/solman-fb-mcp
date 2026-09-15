@@ -94,3 +94,22 @@ structure nodes, but forms, enhancements and reports are only detected when the 
 is *named* with the object ID. An object with no named step cannot be split onto its own
 requirement at all — which is the usual legitimate reason a requirement spans several
 packages.
+
+## Declared versus actual WRICEF
+
+A work package **declares** a WRICEF through its title and its work-item descriptions; it
+**carries** one through the element on its requirement. These are independent, and a release
+review looks at the declaration first, so a mismatch is the most visible defect of all.
+
+The audit derives `declared_wids` from the work-package description plus every work-item
+description, and flags any declared ID the requirement does not carry. Two shapes come out:
+
+- **Declares one WRICEF, requirement carries a different one.** The package is for the wrong
+  object, or the requirement is. One of the two has to move.
+- **Declares a WRICEF, requirement carries none.** Several single-WRICEF packages hanging off
+  one shared FIT requirement produce this. It means those WRICEFs have no requirement
+  describing them — usually because Solution Documentation has no named step for them yet, so
+  there is nothing to attach. Record it as an open dependency, not a clerical error.
+
+Only flag when the package has a requirement; a package declaring a WRICEF with no
+requirement at all is already caught by "no requirement assigned".

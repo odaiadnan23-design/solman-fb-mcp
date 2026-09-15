@@ -7,6 +7,8 @@ API) by default; can be pointed at any SALM service.
 from __future__ import annotations
 
 import json
+import logging
+import os
 import time
 from pathlib import Path
 from typing import Callable, TypeVar
@@ -14,6 +16,14 @@ from typing import Callable, TypeVar
 import httpx
 
 import config
+import hardening
+
+# httpx logs every request line at INFO, which puts full query strings — filters,
+# ids, GUIDs — into whatever captures stdout. Useful when debugging, noise and a
+# small disclosure risk otherwise. Set SOLMAN_HTTP_LOG=1 to get it back.
+if os.environ.get("SOLMAN_HTTP_LOG", "").strip().lower() not in {"1", "true", "yes"}:
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 T = TypeVar("T")
 
@@ -88,10 +98,39 @@ class SolmanClient:
             base_url=config.BASE_URL,
             cookies=load_cookies(),
             verify=config.VERIFY_TLS,
-            timeout=60.0,
+            # Split timeouts: fail fast when the VPN is down (connect), stay
+            # patient once the gateway has the request (read). A flat 60s meant a
+            # dropped tunnel hung every call for a minute.
+            timeout=httpx.Timeout(connect=10.0, read=90.0, write=30.0, pool=10.0),
+            limits=httpx.Limits(max_connections=8, max_keepalive_connections=4),
             headers={"Accept": "application/json"},
             params={"sap-client": config.SAP_CLIENT},
         )
+
+    def _reload_cookies(self) -> None:
+        """Pick up a freshly minted cookie without discarding the connection pool."""
+        self._http.cookies.clear()
+        for name, value in load_cookies().items():
+            self._http.cookies.set(name, value)
+        self._csrf = None
+
+    def _recover_session(self, retry: Callable[[], T]) -> T:
+        """Re-mint the session once, then run retry(). Raises if it cannot.
+
+        This is the difference between a 20-minute audit dying half way and it
+        simply continuing: the cookie expires on a clock, not on demand, so a long
+        read is almost guaranteed to cross the boundary.
+        """
+        if not hardening.auto_refresh_enabled():
+            raise
+        outcome = hardening.refresh_session()
+        if not outcome.get("refreshed"):
+            raise SessionExpired(
+                "session expired and the automatic refresh did not succeed: "
+                f"{outcome.get('reason')}"
+            )
+        self._reload_cookies()
+        return retry()
 
     def close(self) -> None:
         self._http.close()
@@ -130,15 +169,22 @@ class SolmanClient:
                 "SolMan session expired (SAML login page returned). Run: python refresh_session.py"
             )
 
-    def get(self, path: str, params: dict | None = None) -> dict:
+    def get(self, path: str, params: dict | None = None,
+            _recovered: bool = False) -> dict:
         p = {"$format": "json", **(params or {})}
         r = _retry_io(
             lambda: self._http.get(f"{self.service}/{path}", params=p,
                                    headers={"Accept": "application/json"}),
             _RETRIABLE_READ,
         )
-        self._raise_for_auth(r)
-        self._check_session(r)
+        try:
+            self._raise_for_auth(r)
+            self._check_session(r)
+        except SessionExpired:
+            if _recovered:
+                raise
+            return self._recover_session(
+                lambda: self.get(path, params, _recovered=True))
         if r.status_code >= 400:
             raise SolmanError(f"GET {path} -> {r.status_code}: {_sap_error_message(r)}")
         return r.json()
@@ -150,17 +196,31 @@ class SolmanClient:
 
     def results_all(self, path: str, params: dict | None = None,
                     page_size: int = 100, max_rows: int = 2000) -> list[dict]:
-        """Page through an entity set (the gateway caps pages at ~100 rows).
+        """Page through an entity set, refusing to duplicate rows.
 
-        Each page GET carries its own transient-fault retry. Stops on a short
-        page or at max_rows (a deliberate ceiling — deep $skip gets slow on
-        SolMan gateways; raise it consciously for genuinely large reads).
+        THE TRAP THIS GUARDS: on this gateway ``$skip`` is not always honoured —
+        measured on REQUIREMENTSet, where every page came back as page one, so a
+        naive loop "read" 6000 rows that were 100 rows repeated 60 times. The old
+        version returned them, and an audit built on it was silently wrong.
+
+        Each page is fingerprinted; if a page repeats one already seen, paging is
+        not advancing and we stop there and mark the result. Callers get fewer rows
+        than they asked for, never phantom ones.
         """
         rows: list[dict] = []
+        seen: set[str] = set()
         skip = 0
+        self.last_page_stalled = False
         while len(rows) < max_rows:
             page = self.results(path, {**(params or {}),
                                        "$top": str(page_size), "$skip": str(skip)})
+            if not page:
+                break
+            fingerprint = json.dumps(page[0], sort_keys=True, default=str)[:512]
+            if fingerprint in seen:
+                self.last_page_stalled = True
+                break
+            seen.add(fingerprint)
             rows.extend(page)
             if len(page) < page_size:
                 break
@@ -169,6 +229,7 @@ class SolmanClient:
 
     # -- writes ------------------------------------------------------------
     def create(self, entityset: str, body: dict) -> dict:
+        hardening.guard_write("CREATE", entityset)
         token = self._ensure_csrf()
         r = self._retry_csrf(lambda t: _retry_io(lambda: self._http.post(
             f"{self.service}/{entityset}",
@@ -177,10 +238,14 @@ class SolmanClient:
         ), _RETRIABLE_WRITE), token)
         self._raise_for_auth(r)
         if r.status_code not in (200, 201):
+            hardening.journal("CREATE", self.service, entityset, body,
+                              status=r.status_code, error=_sap_error_message(r))
             raise SolmanError(f"CREATE {entityset} -> {r.status_code}: {_sap_error_message(r)}")
+        hardening.journal("CREATE", self.service, entityset, body, status=r.status_code)
         return r.json().get("d", r.json())
 
     def merge(self, key_path: str, body: dict) -> None:
+        hardening.guard_write("MERGE", key_path)
         token = self._ensure_csrf()
         r = self._retry_csrf(lambda t: _retry_io(lambda: self._http.request(
             "MERGE", f"{self.service}/{key_path}",
@@ -189,7 +254,10 @@ class SolmanClient:
         ), _RETRIABLE_WRITE), token)
         self._raise_for_auth(r)
         if r.status_code not in (200, 204):
+            hardening.journal("MERGE", self.service, key_path, body,
+                              status=r.status_code, error=_sap_error_message(r))
             raise SolmanError(f"MERGE {key_path} -> {r.status_code}: {_sap_error_message(r)}")
+        hardening.journal("MERGE", self.service, key_path, body, status=r.status_code)
 
     def function(self, name: str, str_params: dict | None = None) -> dict:
         """Call a FunctionImport (GET). String params are OData-quoted automatically.
@@ -197,14 +265,22 @@ class SolmanClient:
         Note: several SALM 'get_*' function imports actually EXECUTE actions
         (e.g. get_ppf_actions runs a PPF action), so this requires a CSRF token.
         """
+        if name not in hardening.READ_ONLY_FUNCTIONS:
+            hardening.guard_write("FUNCTION", name)
         token = self._ensure_csrf()
         q: dict = {"$format": "json"}
         for k, v in (str_params or {}).items():
-            q[k] = f"'{v}'" if isinstance(v, str) else v
+            # odata_literal matters here: an unescaped apostrophe in a value
+            # closed the literal and the gateway parsed the rest as OData.
+            q[k] = f"'{odata_literal(v)}'" if isinstance(v, str) else v
         r = self._retry_csrf(lambda t: _retry_io(lambda: self._http.get(
             f"{self.service}/{name}", params=q,
             headers={"X-CSRF-Token": t, "Accept": "application/json"}), _RETRIABLE_WRITE), token)
         self._raise_for_auth(r)
+        if name not in hardening.READ_ONLY_FUNCTIONS:
+            hardening.journal("FUNCTION", self.service, name, str_params,
+                              status=r.status_code,
+                              error=None if r.status_code < 400 else _sap_error_message(r))
         if r.status_code >= 400:
             raise SolmanError(f"FUNCTION {name} -> {r.status_code}: {_sap_error_message(r)}")
         return r.json()
@@ -260,3 +336,70 @@ def session_status() -> dict:
     except SessionExpired as e:
         reset_clients()
         return {"valid": False, "reason": str(e)}
+
+
+def preflight() -> dict:
+    """Everything worth knowing before trusting this connection, in one call.
+
+    Written because the failures that cost the most time were never "the call
+    returned an error" — they were a silent wrong answer from a half-working
+    connection: an expired cookie mid-run, TLS quietly unverified, a write landing
+    in the wrong solution because a target was unset, a read-only session the
+    caller did not know was read-only.
+    """
+    import hardening as _h
+
+    out: dict = {
+        "host": config.SAP_HOST or "(unset)",
+        "client": config.SAP_CLIENT,
+        "base_url": config.BASE_URL,
+    }
+
+    # --- TLS: say plainly whether certificates are being checked -----------
+    v = config.VERIFY_TLS
+    if v is False:
+        out["tls"] = {"verifying": False,
+                      "mode": "DISABLED via SOLMAN_INSECURE_TLS",
+                      "warning": "certificates are not being checked — traffic is "
+                                 "interceptable. Unset SOLMAN_INSECURE_TLS."}
+    elif isinstance(v, str):
+        out["tls"] = {"verifying": True, "mode": f"CA bundle {v}"}
+    elif v is True:
+        out["tls"] = {"verifying": True, "mode": "certifi (truststore unavailable)",
+                      "note": "an internal CA usually is not in certifi; install "
+                              "truststore if verification fails"}
+    else:
+        out["tls"] = {"verifying": True, "mode": "OS trust store (truststore)"}
+
+    # --- session -----------------------------------------------------------
+    out["cookie"] = _h.cookie_health()
+    out["session"] = session_status()
+    out["auto_refresh"] = _h.auto_refresh_enabled()
+
+    # --- write posture -----------------------------------------------------
+    out["read_only"] = _h.read_only()
+    out["config"] = config.validate_env()
+    out["journal"] = {"path": str(_h.JOURNAL),
+                      "recent_writes": len(_h.recent_writes(limit=1000))}
+
+    # --- the RFC read transport -------------------------------------------
+    try:
+        import rfc as _rfc
+        out["rfc_transport"] = _rfc.probe()
+    except Exception as ex:  # noqa: BLE001
+        out["rfc_transport"] = {"available": False, "reason": f"{type(ex).__name__}: {ex}"}
+
+    problems = []
+    if not out["session"].get("valid"):
+        problems.append("session not valid — run refresh_session.py")
+    if out["tls"]["verifying"] is False:
+        problems.append("TLS verification disabled")
+    if out["cookie"].get("warning"):
+        problems.append(out["cookie"]["warning"])
+    if isinstance(out["cookie"].get("acl"), str) and "BROAD" in out["cookie"]["acl"]:
+        problems.append("cookie file ACL is broad — run hardening.harden_cookie()")
+    if not out["config"].get("writes_ready"):
+        problems.append("writes blocked: " + ", ".join(out["config"]["missing_for_writes"]))
+    out["problems"] = problems
+    out["ok"] = not problems
+    return out

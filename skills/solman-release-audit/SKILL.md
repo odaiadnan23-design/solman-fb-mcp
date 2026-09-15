@@ -49,6 +49,25 @@ The script needs requirement IDs because nothing else is reliable. In order of p
    rows and is blind to requirements that have no work package. A sweep-only audit missed
    roughly a tenth of the work packages and every unassigned requirement.
 
+**Cross-check the population against the document table.** Where the system exposes RFC over
+SOAP at `/sap/bc/soap/rfc` (a bare GET answering **415** rather than 403/404 means it is live
+and your session authenticates), `RFC_READ_TABLE` on `CRMD_ORDERADM_H` gives the complete
+document inventory the gateway cannot produce:
+
+```
+QUERY_TABLE CRMD_ORDERADM_H   FIELDS OBJECT_ID, PROCESS_TYPE, DESCRIPTION
+OPTIONS     PROCESS_TYPE = 'S1IT' AND DESCRIPTION LIKE '%<release>%'
+```
+
+Do this before reporting. On the GMR6 release it returned 113 S1IT work packages against the
+104 the requirement-driven population found — **11 were invisible**, including a duplicate
+single-WRICEF package for an interface that already had one. A requirement-driven population
+can only ever find packages that have a requirement, which is exactly the wrong blind spot for
+an audit whose job is finding packages that do not.
+
+Note `RFC_READ_TABLE` truncates a RAW(16) GUID to 16 hex characters and that prefix is shared
+across documents, so join on `OBJECT_ID`, and take full GUIDs from OData.
+
 From the requirement rows the script follows `WpId` / `WpGuid` to the work packages, which is
 the one reliable requirement→work-package link. Work packages with no requirement at all are
 only reachable via the title sweep — say so in the report rather than implying full coverage.
@@ -72,7 +91,7 @@ The output is usually for a release or change manager, so it has to survive scru
   filterable work-package register with status, requirement IDs, NC/GC work item counts and
   the check result per row is what people actually use.
 
-## Interpreting the four findings that recur
+## Interpreting the findings that recur
 
 | Finding | Why it matters | Fix |
 |---|---|---|
@@ -80,6 +99,7 @@ The output is usually for a release or change manager, so it has to survive scru
 | **WRICEF in a work package's work-item scope** that its requirement does not own | Left behind by a requirement re-scope; breaks the one-WRICEF-per-package rule one level below where anyone looks | Remove the structure in the Fiori Work Package app. There is no API route — re-posting the scope unticked does nothing |
 | Work item with **no technical component** | The package cannot progress cleanly | Set once in Fiori, then copy what the app writes; the value is silently dropped on API creation |
 | Single WRICEF on a **General Change only** | A GC cannot carry a transport, and a WRICEF always produces one | Add a Normal Change (S1MJ) work item |
+| Work package **declares a WRICEF its requirement does not carry** | The package's title and work item name one object while the requirement describes another, or none. Comparing scope documents to requirement elements does *not* catch it — both sides can agree and still be wrong about what the package is for. This is what a reviewer sees first | Decide which object the package is for, then retitle it or swap the requirement's element. If the requirement carries no WRICEF at all, the WRICEF has no requirement describing it and needs one |
 
 ## Scope of this skill
 

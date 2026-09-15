@@ -17,6 +17,8 @@ from mcp.server.mcpserver import MCPServer
 
 import attachments as att
 import config
+import hardening
+import rfc
 import requirements as rq
 import scout as sct
 import soldoc as sd
@@ -26,6 +28,7 @@ import testsuite as tst
 import workpackages as wp
 import workspaces as wsp
 from client import SessionExpired, SolmanError
+from client import preflight as client_preflight
 from client import session_status as client_session_status
 
 mcp = MCPServer("solman-fb")
@@ -46,6 +49,12 @@ def _wrap(fn, *args, **kwargs) -> str:
         return json.dumps(fn(*args, **kwargs), indent=2, default=str)
     except SessionExpired as e:
         return f"SESSION EXPIRED: {e}"
+    except hardening.ReadOnlyBlocked as e:
+        return f"READ-ONLY: {e}"
+    except rfc.RfcAuthority as e:
+        return f"RFC AUTHORITY: {e}"
+    except rfc.RfcUnavailable as e:
+        return f"RFC UNAVAILABLE: {e}"
     except (SolmanError, ValueError, sct.ScoutError) as e:
         return f"ERROR: {e}"
     except Exception as e:  # noqa: BLE001 - surface a clean message, not a traceback
@@ -713,6 +722,135 @@ def scout_compare_area(area: str, left: str, right: str, top: int = 500) -> str:
     table, so it is slow -- expect tens of seconds per table.
     """
     return _wrap(sct.compare_area, area, left, right, top)
+
+
+# ==========================================================================
+# Connection health and safety
+# ==========================================================================
+@mcp.tool()
+def preflight() -> str:
+    """Full connection health: TLS mode, cookie age and permissions, session validity,
+    read-only state, whether write targets are configured, and whether the RFC read
+    transport is available. Returns a `problems` list and `ok`.
+
+    Run this FIRST in any session that will write, and before any long enumeration —
+    it catches the failures that otherwise show up as a silently wrong answer
+    (expired cookie mid-run, unverified TLS, an unset planned project that would file
+    work outside the release)."""
+    return _wrap(client_preflight)
+
+
+@mcp.tool()
+def harden_connection() -> str:
+    """Restrict the session cookie file and state directory to the current user only.
+    Run once per machine, or whenever preflight reports a broad ACL."""
+    return _wrap(hardening.harden_cookie)
+
+
+@mcp.tool()
+def recent_writes(limit: int = 20) -> str:
+    """The last N writes this server made (local journal): what, where, when, status.
+
+    Every CREATE, MERGE and action-executing function import is recorded. Use it to
+    answer "what did I just change?" without re-reading the system, and to reconstruct
+    a bulk run that went wrong."""
+    return _wrap(hardening.recent_writes, limit)
+
+
+# ==========================================================================
+# Cross-object discovery (RFC read transport)
+# ==========================================================================
+@mcp.tool()
+def list_object_types() -> str:
+    """Every Focused Build and ChaRM one-order type on this system, with its real name.
+
+    Wider than the OData document-type list, which returns only ten Focused Build
+    types: this includes work items, defects, defect corrections, test requests,
+    tasks, releases, scope changes, and the ChaRM side (requests for change, normal
+    and urgent changes, incidents, problems, service requests)."""
+    return _wrap(rfc.focused_build_types)
+
+
+@mcp.tool()
+def find_documents(process_type: str = "", description_like: str = "",
+                   object_id_like: str = "", max_rows: int = 2000) -> str:
+    """Enumerate one-order documents of ANY type — the read the OData gateway cannot do.
+
+    The gateway ignores $filter on key fields, repeats page one on $skip and caps
+    $top at 100, so "every work package on this release" is unanswerable through it.
+    This reads CRMD_ORDERADM_H directly and is complete.
+
+        find_documents(process_type="S1IT", description_like="GMR6")
+        find_documents(process_type="S1DM")            # every defect
+        find_documents(object_id_like="20000077")      # a number range
+
+    Use it to build an audit population, and to cross-check any population derived
+    from requirement assignments — those can only find packages that HAVE a
+    requirement, which is the wrong blind spot for an audit."""
+    return _wrap(rfc.documents, process_type, description_like, object_id_like, max_rows)
+
+
+@mcp.tool()
+def release_inventory(description_like: str = "") -> str:
+    """Count documents per object type for a release (matched on title substring).
+
+    The one call that answers "what exists for this release, across requirements,
+    work packages, work items, defects and changes" — where a release audit should
+    start."""
+    return _wrap(rfc.inventory, description_like)
+
+
+@mcp.tool()
+def document_texts(document_guid: str) -> str:
+    """Every text note on a document: text id, line count, author, dates.
+
+    Needs the FULL 32-character GUID from OData. Note which ids matter at Gore:
+    S112 is the Release Manager's comment — that is how Change Control leaves
+    feedback on your object, so read it before asking what is wrong. Text CONTENT
+    is not readable (READ_TEXT is authority-blocked and STXL is compressed), but
+    presence, size and authorship are, which is enough to audit whether a required
+    note such as the CCB questionnaire is there."""
+    return _wrap(rfc.texts, document_guid)
+
+
+@mcp.tool()
+def list_text_types(object_type: str = "CRM_ORDERH") -> str:
+    """The text-id catalogue — what CR05, CR01, S112 and the rest actually mean."""
+    return _wrap(rfc.text_types, object_type)
+
+
+@mcp.tool()
+def describe_table(table: str) -> str:
+    """Field list for any table: name, position, type, length, key flag.
+
+    Use it before read_table rather than guessing column names — a wrong column
+    name comes back as a confusing TABLE_WITHOUT_DATA, not a helpful error."""
+    return _wrap(rfc.describe_table, table)
+
+
+@mcp.tool()
+def read_table(table: str, fields: list[str], where: str = "",
+               rowcount: int = 100, skip: int = 0) -> str:
+    """Read any table this user is authorised for, through the RFC transport (read-only).
+
+    Give explicit `fields`: the call builds a fixed 512-byte row and a wide table
+    raises DATA_BUFFER_EXCEEDED. `where` is ABAP SQL, e.g.
+    "PROCESS_TYPE = 'S1IT' AND DESCRIPTION LIKE '%GMR6%'".
+
+    Caveat: RAW columns render truncated — a CRMD_ORDERADM_H GUID comes back as a
+    16-character prefix shared by many documents, so join on OBJECT_ID and take
+    full GUIDs from OData."""
+    return _wrap(rfc.read_table, table, fields, where, rowcount, skip)
+
+
+@mcp.tool()
+def rfc_probe() -> str:
+    """Whether the RFC read transport works here, and what it can call.
+
+    Availability and authorisation are separate: the endpoint can be open while
+    S_RFC withholds a given function group."""
+    return _wrap(rfc.probe)
+
 
 if __name__ == "__main__":
     config.require_host()   # fail fast with a clear message if .env isn't configured
