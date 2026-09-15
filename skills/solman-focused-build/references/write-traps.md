@@ -22,8 +22,9 @@ call returned a success status and changed nothing.
 |---|---|---|
 | `BRWPSet` / `WORKPACKAGESet` MERGE | `501 ..._GET_ENTITY not implemented` | None |
 | `WORKSPACESET` MERGE | `204` and silently no-ops | None — set at creation |
+| Any `create` answering `201` with an empty entity | A no-op; the reason is in the `sap-message` header (surfaced as `__sap_message`) | Read it before concluding anything was created — e.g. S1CR is "blocked for further business transactions" |
 | Reading `RequestedRelease*` / `ActualRelease*` | Blank on **every** work package, including correct ones | Test targeting with `list_scope_components` instead — targeted returns components, untargeted returns `[]` |
-| Work package long text via `BTTEXTSET` POST | `201` with a null key, nothing persisted | Set `long_description` at creation, or Fiori |
+| Work package text via `BTTEXTSET` POST or direct MERGE | POST: `201`, nothing persisted. MERGE: `501` no UPDATE_ENTITY | MERGE inside a `$batch` changeset (`write_text_note`); read with `BTTEXTSet?$filter=ConfigId eq 2` |
 | `ProjPhaseGuid` | All zeros even on good work packages | Read `WORKSPACESET(...)/BT_ITPPM` and take the GUID from `PpmUrl` |
 | `create_work_package` `assigned: true` | **Trustworthy** — `link_verified` really reads `BT_RELATEDTRANSSet` | — |
 
@@ -36,8 +37,8 @@ in Fiori. This is the work-around for blank `SOLMAN_WP_*` environment settings.
 
 | What | Behaviour | Work-around |
 |---|---|---|
-| `config_item` on `create_work_item` | Silently dropped, even with a valid value from the same work package's value help plus `ibase_instance` and `wp_system` | Unresolved. Set once in Fiori, then copy whatever the app writes |
-| `BTSCOPESET` deep create with `SCOPE_DOCSet` | Adds and ticks. `Checked: false` / `Deleted: true` do nothing | Untick and remove are Fiori-only — never tick everything offered |
+| `config_item` on `create_work_item` | Dropped whenever `WpSystem` is the bare SID | Send `WpSystem` as `SID:CLIENT` with ConfigItem/IbaseInstance/CmpDesc together (now the default); `set_work_item_component` repairs existing items |
+| `BTSCOPESET` deep create with `SCOPE_DOCSet` | Adds and ticks. `Checked: false` / `Deleted: true` do nothing | Remove the structure behind the document with `unassign_structure` while in Scoping — and never tick everything offered |
 | `SCOPE_DOCSet` read at In Development or later | Returns nothing (scope frozen) | Not a missing assignment — do not report it as one |
 
 ## Reads that lie

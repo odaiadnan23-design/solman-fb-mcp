@@ -63,7 +63,10 @@ c.create("BTSCOPESET", {
     "WpDescription": item["description"], "Wricef": "W", "WricefKey": "W",
     "PriorityId": item.get("priority_id") or "2", "Changeable": True,
     "ValuePoints": 0, "StoryPoints": 0, "ConfigItem": item.get("config_item") or "",
-    "IbaseInstance": "", "CmpDesc": "", "WpSystem": "", "ProcTypeDesc": "", "Sprint": "",
+    # keep the component: WpSystem must be SID:CLIENT and travel with ConfigItem,
+    # IbaseInstance and CmpDesc, or the backend blanks all four
+    "IbaseInstance": "5194", "CmpDesc": "P1M 0021318499 100", "WpSystem": "P1M:100",
+    "ProcTypeDesc": "", "Sprint": "",
     "WpScope": "", "WpStatus": "", "Url": "", "Text": item.get("text") or "",
     "BTSCOPE_PARTNERSSet": [], "SCOPE_DOCSet": payload,
 })
@@ -74,8 +77,9 @@ print(sum(1 for d in after if d.get("Checked") and d.get("ItemGuid") == ig), "/"
 
 ### It only adds
 
-Re-posting with `Checked: False` or `Deleted: True` has no effect. Unticking and removing a
-document are **Fiori-only**. So:
+Re-posting with `Checked: False` or `Deleted: True` has no effect. A scope document goes away
+only when its structure is unassigned from the work package (`unassign_structure`, Scoping
+only) — see structures.py. So:
 
 - **Never pass every offered document.** The offer list is derived from the structures
   assigned to the work package, which can include things the requirement no longer owns.

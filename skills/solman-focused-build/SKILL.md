@@ -86,14 +86,19 @@ documents are ticked. There is no tool for it; the only route is a deep create o
 `BTSCOPESET` carrying the whole `SCOPE_DOCSet` array — the recipe is in
 `references/work-items.md`.
 
-It **adds and ticks only**. Re-posting with `Checked: false` or `Deleted: true` does nothing;
-untick and remove are Fiori-only. So **never tick everything offered** — filter the payload to
-the documents that belong on that work item. A wrong tick is not reversible through the API.
+It **adds and ticks only**. Re-posting with `Checked: false` or `Deleted: true` does nothing.
+What CAN be removed is the structure behind a scope document: `unassign_structure` prunes
+the work package's Solution Documentation assignment (DROP_DOC `RelevantStructureSet` PUT
+with the Documentation app's unassign action) **while the package is in Scoping**; past that
+the backend answers "Customizing settings prevent assignment changes". So still **never tick
+everything offered** — filter the payload to the documents that belong on that work item —
+and prune stale structures before moving a package on.
 
-**Technical component.** `config_item` (Productive System) is silently dropped on creation,
-even when the value comes straight from that work package's own `list_scope_components` value
-help with `ibase_instance` and `wp_system` alongside. Unresolved. Set it once in Fiori and
-copy what the app writes.
+**Technical component.** The backend keeps `config_item` (Productive System) only when
+`WpSystem` arrives as `SID:CLIENT` (`P1M:100`) together with `ConfigItem`, `IbaseInstance`
+and `CmpDesc`; a bare SID makes it drop all four silently and store `:`. `create_work_item`
+now appends the client; `set_work_item_component` repairs an existing item through the same
+deep-create. Proven on 27 items.
 
 ## Lifecycle gates
 
@@ -107,8 +112,10 @@ These decide what can still be changed, and they close behind you:
 - **Cancelling an Approved requirement requires Postpone first** — `S1BR_POSTPONE`, after
   which `S1BR_RESTORE` and `S1BR_CANCEL` appear.
 - **Unassigning a requirement in Fiori clears *all* its work package links** and resets the
-  status. Recovery is re-approve plus reassign every link. There is no API route —
-  `wpUnassignmentFromRequirement` returns `404` in every parameter form tried.
+  status. Recovery is re-approve plus reassign every link. The API alternative is
+  `unassign_work_package` (a single pair, via the POST-only import
+  `wpUnassignmentFromRequirement` — calling it with GET was what produced the earlier 404s);
+  `check_unassign_work_package` is its read-only pre-check. Not yet exercised live.
 
 `list_requirement_actions` / `list_workspace_actions` show what is currently possible; use
 them rather than assuming an action exists.
