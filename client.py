@@ -242,7 +242,14 @@ class SolmanClient:
                               status=r.status_code, error=_sap_error_message(r))
             raise SolmanError(f"CREATE {entityset} -> {r.status_code}: {_sap_error_message(r)}")
         hardening.journal("CREATE", self.service, entityset, body, status=r.status_code)
-        return r.json().get("d", r.json())
+        out = r.json().get("d", r.json())
+        msg = r.headers.get("sap-message")
+        if msg and isinstance(out, dict):
+            # A 201 with an empty entity and an "info" message here is the backend
+            # saying it did nothing — e.g. "Business transaction type Request for Change
+            # is blocked for further business transactions". Surface it.
+            out["__sap_message"] = msg
+        return out
 
     def merge(self, key_path: str, body: dict) -> None:
         hardening.guard_write("MERGE", key_path)
@@ -284,6 +291,111 @@ class SolmanClient:
         if r.status_code >= 400:
             raise SolmanError(f"FUNCTION {name} -> {r.status_code}: {_sap_error_message(r)}")
         return r.json()
+
+    def batch_merge(self, key_path: str, body: dict, method: str = "MERGE") -> dict:
+        """Update one entity inside a $batch changeset.
+
+        Some SALM entity sets implement no UPDATE_ENTITY (a direct MERGE answers 501)
+        yet the Fiori apps update them — a UI5 model with useBatch sends the update
+        inside a changeset, and the gateway routes that through the service's
+        CHANGESET_PROCESS, which is where the work is actually done. Guarded and
+        journalled like every write. `method` is MERGE or PUT.
+        """
+        import re as _re
+        import uuid
+        hardening.guard_write(f"BATCH-{method}", key_path)
+        token = self._ensure_csrf()
+        b = f"batch_{uuid.uuid4().hex}"
+        cs = f"changeset_{uuid.uuid4().hex}"
+        payload = json.dumps(body)
+        crlf = "\r\n"
+        inner = crlf.join([
+            f"--{cs}", "Content-Type: application/http", "Content-Transfer-Encoding: binary", "",
+            f"{method} {key_path} HTTP/1.1", "Content-Type: application/json",
+            "Accept: application/json", f"Content-Length: {len(payload.encode('utf-8'))}", "",
+            payload, f"--{cs}--", ""])
+        content = crlf.join([f"--{b}", f"Content-Type: multipart/mixed; boundary={cs}", "",
+                             inner + f"--{b}--", ""]).encode("utf-8")
+        r = self._retry_csrf(lambda t: _retry_io(lambda: self._http.post(
+            f"{self.service}/$batch", content=content,
+            headers={"X-CSRF-Token": t, "Content-Type": f"multipart/mixed; boundary={b}",
+                     "Accept": "multipart/mixed"}), _RETRIABLE_WRITE), token)
+        self._raise_for_auth(r)
+        text = r.text
+        # the inner response status is what matters, not the 202 of the envelope
+        inner_status = [int(x) for x in _re.findall(r"HTTP/1\.1 (\d{3})", text)]
+        ok = r.status_code < 400 and bool(inner_status) and all(200 <= s < 300 for s in inner_status)
+        m = _re.search(r'"value"\s*:\s*"([^"]+)"', text)
+        err = None if ok else (m.group(1) if m else text[:300])
+        hardening.journal(f"BATCH-{method}", self.service, key_path, body,
+                          status=inner_status[0] if inner_status else r.status_code, error=err)
+        if not ok:
+            raise SolmanError(f"BATCH {method} {key_path} -> {inner_status or r.status_code}: {err}")
+        return {"status": inner_status, "raw": text[:600]}
+
+    def put(self, key_path: str, body: dict) -> None:
+        """PUT (full replace) on an entity. Some SALM sets are updated this way by
+        their apps (drop_doc: defaultUpdateMethod PUT). Guarded and journalled."""
+        hardening.guard_write("PUT", key_path)
+        token = self._ensure_csrf()
+        r = self._retry_csrf(lambda t: _retry_io(lambda: self._http.put(
+            f"{self.service}/{key_path}",
+            headers={"X-CSRF-Token": t, "Content-Type": "application/json", "Accept": "application/json"},
+            content=json.dumps(body).encode("utf-8"),
+        ), _RETRIABLE_WRITE), token)
+        self._raise_for_auth(r)
+        hardening.journal("PUT", self.service, key_path, body, status=r.status_code,
+                          error=None if r.status_code < 400 else _sap_error_message(r))
+        if r.status_code not in (200, 204):
+            raise SolmanError(f"PUT {key_path} -> {r.status_code}: {_sap_error_message(r)}")
+
+    def batch_create(self, entityset: str, body: dict) -> dict:
+        """POST a new entity inside a $batch changeset and return the created entity.
+
+        Same reason as batch_merge: the Fiori apps create through a changeset
+        (useBatch), and some SALM sets answer a direct POST with 201 and an empty
+        entity while persisting nothing. WS_REQUEST_CHANGESet is the proven case.
+        """
+        import re as _re
+        import uuid
+        hardening.guard_write("BATCH-CREATE", entityset)
+        token = self._ensure_csrf()
+        b = f"batch_{uuid.uuid4().hex}"
+        cs = f"changeset_{uuid.uuid4().hex}"
+        payload = json.dumps(body)
+        crlf = "\r\n"
+        inner = crlf.join([
+            f"--{cs}", "Content-Type: application/http", "Content-Transfer-Encoding: binary", "",
+            f"POST {entityset} HTTP/1.1", "Content-Type: application/json",
+            "Accept: application/json", f"Content-Length: {len(payload.encode('utf-8'))}", "",
+            payload, f"--{cs}--", ""])
+        content = crlf.join([f"--{b}", f"Content-Type: multipart/mixed; boundary={cs}", "",
+                             inner + f"--{b}--", ""]).encode("utf-8")
+        r = self._retry_csrf(lambda t: _retry_io(lambda: self._http.post(
+            f"{self.service}/$batch", content=content,
+            headers={"X-CSRF-Token": t, "Content-Type": f"multipart/mixed; boundary={b}",
+                     "Accept": "multipart/mixed"}), _RETRIABLE_WRITE), token)
+        self._raise_for_auth(r)
+        text = r.text
+        inner_status = [int(x) for x in _re.findall(r"HTTP/1\.1 (\d{3})", text)]
+        ok = r.status_code < 400 and bool(inner_status) and all(200 <= s < 300 for s in inner_status)
+        created: dict = {}
+        m = _re.search(r"(\{.*\})\s*(?:\r?\n)?--", text, re.S if False else _re.S)
+        if m:
+            try:
+                created = json.loads(m.group(1)).get("d", {})
+            except ValueError:
+                created = {}
+        sm = _re.search(r"sap-message:\s*(\{.*?\})\r?\n", text)
+        if sm and isinstance(created, dict):
+            created["__sap_message"] = sm.group(1)
+        err_m = _re.search(r'"value"\s*:\s*"([^"]+)"', text)
+        err = None if ok else (err_m.group(1) if err_m else text[:300])
+        hardening.journal("BATCH-CREATE", self.service, entityset, body,
+                          status=inner_status[0] if inner_status else r.status_code, error=err)
+        if not ok:
+            raise SolmanError(f"BATCH CREATE {entityset} -> {inner_status or r.status_code}: {err}")
+        return created
 
     def function_post(self, name: str, str_params: dict | None = None,
                       body: dict | None = None) -> dict:

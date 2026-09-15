@@ -17,9 +17,12 @@ from mcp.server.mcpserver import MCPServer
 
 import attachments as att
 import config
+import charm
+import defects
 import documents as docs
 import hardening
 import rfc
+import structures
 import requirements as rq
 import scout as sct
 import soldoc as sd
@@ -965,6 +968,139 @@ def rfc_function_search(pattern: str, group: str = "*") -> str:
 def rfc_function_interface(function_module: str) -> str:
     """Import/export/table parameters of a function module (RFC_GET_FUNCTION_INTERFACE)."""
     return _wrap(rfc.function_interface, function_module)
+
+
+
+# ==========================================================================
+# Structure assignment (the WP-side of Solution Documentation)
+# ==========================================================================
+@mcp.tool()
+def list_structure_assignments(crm_guid: str, branch_id: str = "") -> str:
+    """Every Solution Documentation structure assigned to a work package, work item or
+    requirement (DROP_DOC_SRV, as the Documentation app reads it). This is the
+    assignment that survives a requirement re-scope and feeds the work item's scope
+    documents — compare it against the requirement's elements."""
+    return _wrap(structures.list_assignments, crm_guid, branch_id)
+
+
+@mcp.tool()
+def wricef_structures_in_scope(crm_guid: str, branch_id: str = "") -> str:
+    """The WRICEF structures (IDD/EDD/FDD/RDD…) assigned to a document — catches a FIT
+    package still carrying an interface one level below the requirement."""
+    return _wrap(structures.wricef_in_scope, crm_guid, branch_id)
+
+
+@mcp.tool()
+def unassign_structure(crm_guid: str, structure_id: str = "", name_prefix: str = "",
+                       branch_id: str = "") -> str:
+    """Remove ONE structure from a work package's assignment — the API form of the
+    Documentation app's "Unassign selected structures" (PUT RelevantStructureSet with the
+    app's unassign action). Give structure_id, or name_prefix such as "IDD0816".
+
+    Works while the package is in Scoping; past that the backend answers "Customizing
+    settings prevent assignment changes" (proven: 2000007713 in Scoping -> removed;
+    2000007715 in To Be Developed -> refused). Verified by re-read; journalled."""
+    def _run():
+        if name_prefix:
+            return structures.unassign_by_name(crm_guid, name_prefix, branch_id)
+        if not structure_id:
+            raise ValueError("give structure_id or name_prefix")
+        return structures.unassign(crm_guid, structure_id, branch_id)
+    return _wrap(_run)
+
+
+@mcp.tool()
+def assign_structure(crm_guid: str, structure_id: str, structure_type: str = "",
+                     branch_id: str = "") -> str:
+    """Assign a structure to a document via DiagramAssignStructures (POST import).
+    Implemented from the app source; not yet exercised live."""
+    return _wrap(structures.assign, crm_guid, structure_id, structure_type, branch_id)
+
+
+# ==========================================================================
+# Text notes and the work item component
+# ==========================================================================
+@mcp.tool()
+def list_text_note_types(config_id: int = 2) -> str:
+    """Text note types the Work Package app offers (configId 2: S115 Description, S114 Memo,
+    S105 Comment, role comments S108/S109/S112/S113)."""
+    return _wrap(charm.text_types, config_id)
+
+
+@mcp.tool()
+def read_text_notes(guid: str, process_type: str = "S1IT", config_id: int = 2) -> str:
+    """Text notes on a document WITH CONTENT. BTTEXTSet is empty without the numeric
+    ConfigId filter the Fiori app always sends — that is the whole trick."""
+    return _wrap(charm.read_texts, guid, process_type, config_id)
+
+
+@mcp.tool()
+def write_text_note(guid: str, text_type_id: str, value: str, process_type: str = "S1IT",
+                    config_id: int = 2) -> str:
+    """Write a text note (e.g. S114 Memo, S115 Description) on a work package — how the CCB
+    questionnaire gets onto a package without Fiori. Goes through a $batch changeset
+    because a direct MERGE answers 501. Verified by re-read; journalled."""
+    return _wrap(charm.write_text, guid, text_type_id, value, process_type, config_id)
+
+
+@mcp.tool()
+def set_work_item_component(work_package_guid: str, work_item_guid: str, config_item: str,
+                            ibase_instance: str, system_id: str, client: str = "",
+                            cmp_desc: str = "") -> str:
+    """Set the technical component (Productive System) on an existing work item. The
+    backend keeps it only when WpSystem is SID:CLIENT and ConfigItem/IbaseInstance/CmpDesc
+    are sent together — which is why API-created items were blank. Proven on 27 items."""
+    return _wrap(wp.set_work_item_component, work_package_guid, work_item_guid, config_item,
+                 ibase_instance, system_id, client, cmp_desc)
+
+
+# ==========================================================================
+# Creating documents: requests for change, defects
+# ==========================================================================
+@mcp.tool()
+def create_request_for_change(title: str, description: str, requester_bp: str,
+                              priority: str = "2", category: str = "", change_manager_bp: str = "",
+                              sold_to_party_bp: str = "", actual_release: str = "",
+                              type_id: str = "S1CR", external_reference: str = "") -> str:
+    """Create a Request for Change through WS_REQUEST_CHANGESet, the generic app's own path.
+    type_id S1CR is what the app creates; a ChaRM type (ZMCR) is passed through for the
+    backend to accept or refuse — read the created document's ProcessType back."""
+    return _wrap(charm.create_request_for_change, title, description, requester_bp, priority,
+                 category, change_manager_bp, sold_to_party_bp, actual_release, type_id,
+                 external_reference)
+
+
+@mcp.tool()
+def list_test_packages_for_defects(query: str = "", top: int = 100) -> str:
+    """Test packages a defect can be raised against (TM_TWL_SRV)."""
+    return _wrap(defects.test_packages, query, top)
+
+
+@mcp.tool()
+def list_test_cases_in_package(test_package_id: str, top: int = 200) -> str:
+    """Test cases in a package — the second key a defect needs."""
+    return _wrap(defects.test_cases, test_package_id, top)
+
+
+@mcp.tool()
+def defect_value_helps() -> str:
+    """Priorities, defect categories, process types and CSN component roots for create_defect."""
+    return _wrap(defects.value_helps)
+
+
+@mcp.tool()
+def create_defect(test_package_id: str, test_case_id: str, short_text: str, long_text: str,
+                  priority: str = "2", reporter_bp: str = "", processor_bp: str = "",
+                  support_team_bp: str = "", system_id: str = "", client: str = "",
+                  installation: str = "", csn_component: str = "", category: str = "",
+                  external_reference: str = "") -> str:
+    """Create a defect (S1DM) against a test case, exactly as My Test Executions does
+    (TM_TWL_SRV DefectCreationSet). The backend refuses creation without a test-package
+    context — that is Gore's process, not an API gap. Missing reporter/processor/team come
+    from the package defaults. Not yet exercised on a live test package."""
+    return _wrap(defects.create_defect, test_package_id, test_case_id, short_text, long_text,
+                 priority, reporter_bp, processor_bp, support_team_bp, system_id, client,
+                 installation, csn_component, category, "", "S1DM", "", 0, 0, external_reference)
 
 
 if __name__ == "__main__":

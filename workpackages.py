@@ -224,7 +224,10 @@ def create_work_item(work_package_guid: str, description: str, wricef: str = "no
         "Text": text, "PriorityId": priority, "Changeable": True,
         "ValuePoints": 0, "StoryPoints": 0,
         "ConfigItem": config_item, "IbaseInstance": ibase_instance, "CmpDesc": cmp_desc,
-        "WpSystem": wp_system, "ProcTypeDesc": proc_type_desc, "Sprint": sprint,
+        # SID alone is silently dropped together with ConfigItem/IbaseInstance/CmpDesc;
+        # the backend wants SID:CLIENT exactly as the Fiori app sends it (P1M:100).
+        "WpSystem": (f"{wp_system}:{config.SAP_CLIENT}" if wp_system and ":" not in wp_system else wp_system),
+        "ProcTypeDesc": proc_type_desc, "Sprint": sprint,
         "WpScope": "", "WpStatus": "", "Url": "", "ZZFLD00000B": "", "ZFC_ZFLD00000B": 0,
         "BTSCOPE_PARTNERSSet": []})
 
@@ -236,6 +239,54 @@ def create_work_item(work_package_guid: str, description: str, wricef: str = "no
             "description": description[:MAX_TITLE], "status": match[0].get("status"),
             "config_item": config_item, "system": wp_system,
             "wp_moved_to_scoping": moved, "created": True}
+
+
+def set_work_item_component(work_package_guid: str, work_item_guid: str, config_item: str,
+                            ibase_instance: str, system_id: str, client: str = "",
+                            cmp_desc: str = "") -> dict:
+    """Set the technical component (Productive System) on an existing work item.
+
+    WHY IT WAS EVER BLANK. create_work_item passed ConfigItem and IbaseInstance but
+    WpSystem as the bare SID ("P1M"). The Fiori app sends WpSystem as SID:CLIENT
+    ("P1M:100") together with ConfigItem, IbaseInstance and CmpDesc, and the backend
+    keeps the component only when all four agree; otherwise it silently drops them and
+    stores WpSystem as ":" — which is exactly what every API-created work item showed.
+    Proven 16-Sep-2026 on 2000007740: blank -> 7100002884 in one deep-create.
+
+    The write is the same BTSCOPESET deep-create used to tick scope documents (it
+    re-saves the item), carrying the item's current scope documents unchanged.
+    """
+    wg = _dash(work_package_guid).replace("-", "")
+    ig = _dash(work_item_guid).replace("-", "")
+    client = client or config.SAP_CLIENT
+    cmp_desc = cmp_desc or f"{system_id} {client}"
+    c = client_for(config.SVC_GENERIC)
+    item = next((x for x in list_work_items(wg) if x["item_guid"] == ig), None)
+    if not item:
+        raise SolmanError(f"work item {ig} not found on work package {wg}")
+    key = f"BTSCOPESET(WpGuid='{wg}',WpItemGuid='{ig}')"
+    docs = [d for d in c.results(f"{key}/SCOPE_DOCSet") if d.get("ItemGuid") == ig]
+    payload = [{"WpGuid": wg, "ItemGuid": ig, "Checked": bool(d.get("Checked")), "Selectable": True,
+                "ContextOcc": d["ContextOcc"], "Leaf": d["Leaf"], "Path": d["Path"],
+                "OccTxt": d["OccTxt"], "ObjectType": d["ObjectType"], "ObjectDesc": d["ObjectDesc"],
+                "SbraTxt": d["SbraTxt"], "Client": d["Client"], "Context": "", "Objid": "",
+                "Title": "", "StatusText": "", "DocuTypeText": "", "AuthorFullname": "",
+                "RfcGuid": "00000000-0000-0000-0000-000000000000", "ViewTxt": "", "SlanDesc": "",
+                "Guid": "", "Url": d["Url"], "Parent": "", "Deleted": False} for d in docs]
+    cls = (item.get("wricef") or "F")[0]
+    c.create("BTSCOPESET", {
+        "WpGuid": wg, "WpItemGuid": ig, "WpType": item["type"], "WpDescription": item["description"],
+        "Wricef": cls, "WricefKey": cls, "PriorityId": item.get("priority_id") or "2",
+        "Changeable": True, "ValuePoints": item.get("value_points") or 0,
+        "StoryPoints": item.get("story_points") or 0,
+        "ConfigItem": config_item, "IbaseInstance": ibase_instance, "CmpDesc": cmp_desc,
+        "WpSystem": f"{system_id}:{client}",
+        "ProcTypeDesc": "", "Sprint": item.get("sprint") or "", "WpScope": "", "WpStatus": "",
+        "Url": "", "Text": item.get("text") or "", "ZZFLD00000B": "", "ZFC_ZFLD00000B": 0,
+        "BTSCOPE_PARTNERSSet": [], "SCOPE_DOCSet": payload})
+    after = next((x for x in list_work_items(wg) if x["item_guid"] == ig), {})
+    return {"work_package": wg, "work_item": ig, "config_item": after.get("config_item"),
+            "set": after.get("config_item") == config_item}
 
 
 def list_work_items(work_package_guid: str) -> list[dict]:

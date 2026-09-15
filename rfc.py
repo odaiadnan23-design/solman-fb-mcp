@@ -210,7 +210,8 @@ def read_table(table: str, fields: list[str] | None = None, where: str = "",
     Values are returned as the kernel renders them — space-padded and, for RAW
     columns, possibly truncated. See _TRUNCATION_WARNINGS.
     """
-    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_/]{0,29}", table):
+    # plain names, and namespaced ones like /UI5/APPIDX or /SALM/RM_RCLASS
+    if not re.fullmatch(r"(?:/[A-Za-z0-9_]{1,10}/)?[A-Za-z_][A-Za-z0-9_]{0,29}", table):
         raise ValueError(f"implausible table name: {table!r}")
     fields = [f.strip().upper() for f in (fields or []) if f.strip()]
     field_xml = "".join(f"<item><FIELDNAME>{_xml_escape(f)}</FIELDNAME></item>" for f in fields)

@@ -201,3 +201,40 @@ if FAILED:
     print(f"{len(FAILED)} FAILED: {', '.join(FAILED)}")
     sys.exit(1)
 print("late checks passed")
+
+
+def _module_checks():
+    print("structures: constants and guards")
+    import structures
+    check("unassign action carries the app id", structures.ACTION_UNASSIGN,
+          "com.sap.solman.fb.dropdoc_RelevantStructure_Update_Unassign")
+    check("guid normalised", structures._g("dbbd843b-afa2-1fd1-ac88-45e443b68df0"),
+          "DBBD843BAFA21FD1AC8845E443B68DF0")
+    print("charm: text key building")
+    import charm, inspect
+    src = inspect.getsource(charm.write_text)
+    check("write_text uses the batch path", "batch_merge" in src, True)
+    check("write_text escapes the type name", "odata_literal" in src, True)
+    check("WP app configId is 2", charm.WP_CONFIG_ID, 2)
+    print("defects: context is mandatory")
+    import defects
+    raises("create_defect refuses without test context",
+           lambda: defects.create_defect("", "", "x", "y"), Exception)
+    print("client: new write verbs are guarded and journalled")
+    import client
+    for name in ("batch_merge", "batch_create", "put"):
+        s2 = inspect.getsource(getattr(client.SolmanClient, name))
+        check(f"{name} guarded", "guard_write" in s2, True)
+        check(f"{name} journalled", "journal(" in s2, True)
+    print("workpackages: WpSystem is SID:CLIENT")
+    import workpackages
+    s3 = inspect.getsource(workpackages.create_work_item)
+    check("create_work_item appends the client", 'config.SAP_CLIENT' in s3 and ':' in s3, True)
+    check("set_work_item_component exists", hasattr(workpackages, "set_work_item_component"), True)
+
+
+_module_checks()
+if FAILED:
+    print(f"{len(FAILED)} FAILED: {', '.join(FAILED)}")
+    sys.exit(1)
+print("module checks passed")

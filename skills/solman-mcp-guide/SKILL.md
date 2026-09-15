@@ -81,6 +81,19 @@ Both use the same SSO cookie. `rfc_probe` tells you whether the RFC side is up.
 `list_scope_components`, `create_work_item`, `list_work_items`, `assign_structures`.
 A work item is a separate document (S1MJ in `3000…`, S1CG in `4000…`); reach it
 through `describe_document` on the package (`related`) or by id.
+- **`set_work_item_component`** — fix a blank technical component on an existing work
+  item. The backend keeps it only when `WpSystem` is `SID:CLIENT` and ConfigItem,
+  IbaseInstance and CmpDesc are sent together; `create_work_item` now does this.
+- **`list_structure_assignments` / `wricef_structures_in_scope` / `unassign_structure`**
+  — the WP-side Solution Documentation assignment, read and pruned exactly as the
+  Documentation app does it. This is the fix for a FIT package still carrying an
+  interface after its requirement was re-scoped. **Works while the package is in
+  Scoping**; past that the backend answers "Customizing settings prevent assignment
+  changes".
+- **`read_text_notes` / `write_text_note` / `list_text_note_types`** — text notes with
+  content. Reads need the numeric `ConfigId` filter (the WP app uses 2); writes go
+  through a `$batch` changeset. This is how the CCB questionnaire gets onto a package
+  without Fiori: `write_text_note(guid, "S114" or "S115", text)`.
 
 ### Defects, corrections, test management
 - Defects (`S1DM`) and corrections (`S1TM`) are fully readable through
@@ -93,11 +106,18 @@ through `describe_document` on the package (`related`) or by id.
   `test_execution_status`, `test_case_where_used`, `download_test_case_xlsx`,
   `upload_test_cases_xlsx`, `test_lookup`.
 
-### ChaRM (ZMCR, ZMMJ, ZMHF, ZMIN, ZMPR, ZMRQ…)
+### ChaRM (ZMCR, ZMMJ, ZMHF, ZMIN, ZMPR, ZMRQ…) and creating documents
 Readable and enumerable with the same tools; lifecycle through
 `list_workspace_actions`/`execute_workspace_action`; transports under
-`describe_document → transports`. **There is no typed create for ChaRM documents or
-defects yet** — that is the known gap.
+`describe_document → transports`.
+- **`create_request_for_change`** — the generic app's own path (`WS_REQUEST_CHANGESet`).
+  On the Gore system it fails loudly with the backend's own words: the Focused Build
+  RFC type S1CR is "blocked for further business transactions" in customizing. Gore
+  raises ZMCR requests in the CRM WebClient; no OData create path for ZMCR exists.
+- **`create_defect`** (+ `list_test_packages_for_defects`, `list_test_cases_in_package`,
+  `defect_value_helps`) — the My Test Executions path (`TM_TWL_SRV DefectCreationSet`).
+  A defect is always born against a test package and test case; the backend refuses
+  otherwise. Payload-complete, not yet exercised on a live test package.
 
 ### Tables, people, system
 - **`describe_table`** before **`read_table`** — a wrong column name surfaces as a
@@ -130,16 +150,19 @@ defects yet** — that is the known gap.
    element links until they are re-attached — do text edits before attaching.
 5. **`create_requirement` ignores `planned_project` without `planned_project_guid`** and
    files the requirement outside its release. `preflight` flags the unset target.
-6. **Work-package text (`BTTEXTSET`) is inert in both directions** through OData, and
-   `READ_TEXT`/`SAVE_TEXT` are authority-blocked. Note *presence* is auditable
-   (`document_texts`: id, lines, author); *content* is not. The CCB question template
-   is readable live from `BT_TEXT_TEMPLATESet`.
+6. **Text notes need the `ConfigId` filter to read and a `$batch` changeset to write.**
+   `BTTEXTSet` without `ConfigId eq 2` is empty; a direct MERGE answers 501. Both looked
+   like "inert" for two days until the Fiori app's own calls were read. Use
+   `read_text_notes`/`write_text_note`. The CCB question template is readable live from
+   `BT_TEXT_TEMPLATESet`.
 7. **Detaching a node from a requirement leaves it in the work package's scope.**
-   Structure assignment is separate; compare `describe_document → work_items` scope
-   against the requirement's elements.
+   Structure assignment is separate; check `wricef_structures_in_scope` and prune with
+   `unassign_structure` while the package is still in Scoping.
 8. **Requirement assignment needs the work package in Scoping.** A Rejected package
    keeps its links and strands its requirements.
-9. **`config_item` is silently dropped on API-created work items.** Known, unresolved.
+9. **A `201 Created` with an empty entity is a no-op with an explanation in the
+   `sap-message` header.** `create`/`batch_create` now surface it as `__sap_message`;
+   read it before concluding anything was created.
 10. **Several `get_*` OData imports execute actions.** `function()` treats everything
     not on the read-only list as a write; POST-only imports go through
     `function_post` — calling them with GET returns a misleading 404.
