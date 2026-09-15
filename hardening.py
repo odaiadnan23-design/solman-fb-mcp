@@ -175,23 +175,32 @@ def refresh_session(timeout: int = 90) -> dict:
     _last_refresh_attempt = now
     script = Path(__file__).with_name("refresh_session.py")
     before = _cookie_mtime()
+    attempts = []
     try:
-        proc = subprocess.run(
-            [sys.executable, str(script), "--headless", "--timeout", str(timeout)],
-            cwd=str(script.parent), capture_output=True, text=True,
-            timeout=timeout + 60,
-        )
-        ok = _cookie_mtime() > before
-        tail = (proc.stderr or proc.stdout or "").strip().splitlines()
-        return {"refreshed": ok, "exit_code": proc.returncode,
-                "reason": "cookie rewritten" if ok else
-                          ("refresh_session.py --headless did not produce a new cookie; "
-                           "run it interactively: python refresh_session.py --timeout 240"
-                           + (f" [{tail[-1][:160]}]" if tail else ""))}
+        # Headless first (silent). Measured 16-Sep-2026: headless exited in 3s
+        # with "gracefully close end" while a headed run against the same warm
+        # IAS session completes silently every time — so fall back to headed with
+        # a bounded window rather than giving up. A window flashing briefly is
+        # the price of a run that does not die half way.
+        for mode, extra in (("headless", ["--headless"]), ("headed", [])):
+            proc = subprocess.run(
+                [sys.executable, str(script), *extra, "--timeout", str(timeout)],
+                cwd=str(script.parent), capture_output=True, text=True,
+                timeout=timeout + 60,
+            )
+            tail = (proc.stderr or proc.stdout or "").strip().splitlines()
+            attempts.append(f"{mode}: exit {proc.returncode}" + (f" [{tail[-1][:120]}]" if tail else ""))
+            if _cookie_mtime() > before:
+                return {"refreshed": True, "mode": mode, "attempts": attempts,
+                        "reason": "cookie rewritten"}
+        return {"refreshed": False, "attempts": attempts,
+                "reason": "neither headless nor headed refresh produced a new cookie; "
+                          "run it by hand: python refresh_session.py --timeout 240"}
     except subprocess.TimeoutExpired:
-        return {"refreshed": False, "reason": f"refresh timed out after {timeout + 60}s"}
+        return {"refreshed": False, "attempts": attempts,
+                "reason": f"refresh timed out after {timeout + 60}s"}
     except Exception as ex:  # noqa: BLE001
-        return {"refreshed": False, "reason": f"{type(ex).__name__}: {ex}"}
+        return {"refreshed": False, "attempts": attempts, "reason": f"{type(ex).__name__}: {ex}"}
     finally:
         _release_lock()
 
