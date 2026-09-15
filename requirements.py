@@ -348,16 +348,13 @@ _UPDATABLE = {"RequirementTitle", "Description", "Remarks", "SuggestedSolution",
 
 def update_requirement(guid: str, **fields: Any) -> dict:
     """MERGE-update editable fields on a requirement. Keys must be REQUIREMENT properties."""
-    body = {k: v for k, v in fields.items() if v is not None}
-    unknown = set(body) - _UPDATABLE
-    if unknown:
-        raise ValueError(f"non-updatable field(s): {unknown}. allowed: {sorted(_UPDATABLE)}")
-    if "RequirementTitle" in body:
-        body["RequirementTitle"] = str(body["RequirementTitle"])[:MAX_TITLE]
-    key = f"REQUIREMENTSet(WpGuid='',RequirementGuid='{_dash(guid)}')"
-    with SolmanClient(service=config.SVC_BIZ_REQ) as c:
-        c.merge(key, body)
-    return {"guid": _dash(guid), "updated": list(body)}
+    # v4: every update goes through the full-entity $batch MERGE the Fiori app uses.
+    # The old field-list MERGE blanked SolutionId (hiding element links) and could not
+    # touch planned project, team, owner or classification. Same signature, no trap.
+    changes = {k: v for k, v in fields.items() if v is not None}
+    if not changes:
+        return {"guid": _dash(guid), "applied": {}, "all_applied": True}
+    return update_requirement_fields(guid, **changes)
 
 
 def list_actions(guid: str) -> list[dict]:
@@ -524,3 +521,102 @@ def _work_package_id(work_package_guid: str) -> str | None:
     import workspaces as _ws
     hdr = _ws.get_workspace(work_package_guid, "S1IT")
     return hdr.get("ObjectId") if hdr else None
+
+
+# --------------------------------------------------------------------------
+# Full-entity update — every header field, the way the Fiori app saves
+# --------------------------------------------------------------------------
+# The Requirements app (/SALM/OST_BR, com.sap.solman.fb.requirement_mgt_7_2) saves an
+# edit as m.update(path, entity) on a UI5 v2 model with default settings: a MERGE
+# of the WHOLE entity, inside a $batch changeset, with the REQELEMENTSet navigation
+# deleted first. Two things follow that the field-list MERGE in update_requirement
+# never did:
+#   * a partial MERGE blanks whatever it omits (SolutionId, team, owner, planned
+#     project) — the full entity carries them, so nothing is lost;
+#   * the changeset route reaches CHANGESET_PROCESS, where PlannedProject / Guid,
+#     RequirementsTeam*, Owner*, Category and ClassifAttributes are honoured, whereas
+#     a direct MERGE carrying PlannedProject answers 500.
+# Proven 16-Sep-2026 on requirement 1000044872.
+
+# Fields the caller may change. Everything else is carried through unchanged.
+_FULL_UPDATABLE = {
+    "RequirementTitle", "Description", "Remarks", "SuggestedSolution", "LongDescription",
+    "PriorityName", "PriorityId", "Value", "Effort", "ZZFLD00000B",
+    "PlannedProject", "PlannedProjectGuid",
+    "RequirementsTeamName", "RequirementsTeamBpNb",
+    "OwnerName", "OwnerBpNo", "BusinessExpertName", "BusinessExpertBpNo",
+    "SolutionId", "BranchId", "SoldocScopeId",
+    "Category", "ClassifAttributes", "WricefString", "Local",
+}
+_SERVER_OWNED = ("CreatedAt", "ChangedAt", "CreatedBy", "ChangedBy", "RequirementIdLink",
+                 "CrmLink", "WpCrmLink", "SoldocUrl", "Icon", "LineItems", "RequirementItems",
+                 "MaxLines", "EnableEdit", "Assignable", "Wpassignment", "TruncPath")
+
+
+def _full_entity(row: dict) -> dict:
+    body = {k: v for k, v in row.items()
+            if k != "__metadata" and not (isinstance(v, dict) and "__deferred" in v)}
+    for k in ("Category", "ClassifAttributes"):
+        if isinstance(body.get(k), dict):
+            body[k] = {kk: vv for kk, vv in body[k].items() if kk != "__metadata"}
+    for k in _SERVER_OWNED:
+        body.pop(k, None)
+    return body
+
+
+def update_requirement_fields(requirement_guid: str, **changes) -> dict:
+    """Change any header field of a requirement — including the ones the field-list
+    update could not touch: planned project (+ GUID), team, owner, business expert,
+    category, classification, solution/branch/scope.
+
+    Reads the current entity, applies `changes`, MERGEs the whole thing in a $batch
+    changeset, and reads it back; the result lists each requested field as applied
+    or not. Journalled; blocked by SOLMAN_READONLY.
+
+        update_requirement_fields(g, PlannedProject="MYPROJ_1.0_CHG0001", PlannedProjectGuid="…")
+        update_requirement_fields(g, RequirementsTeamName="RTR Team", RequirementsTeamBpNb="228")
+        update_requirement_fields(g, ClassifAttributes={"AttrName": "/SALM/WRICEF", "Key": "1", "Value": "WRICEF"})
+    """
+    bad = sorted(set(changes) - _FULL_UPDATABLE)
+    if bad:
+        raise ValueError(f"not updatable through this route: {bad}; allowed: {sorted(_FULL_UPDATABLE)}")
+    if "PlannedProject" in changes and "PlannedProjectGuid" not in changes:
+        raise ValueError("PlannedProject needs PlannedProjectGuid alongside — the name alone is "
+                         "ignored and the requirement ends up outside its release")
+    if "PriorityName" in changes and "PriorityId" not in changes:
+        changes["PriorityId"] = str(changes["PriorityName"])[:1]
+    # Resolve to a RequirementId first: the collection's RequirementGuid filter is a
+    # string compare the gateway ignores, and guid'...' is an invalid token on it.
+    ref = requirement_guid.replace("-", "").strip()
+    c = client_for(config.SVC_BIZ_REQ)
+    if len(ref) == 32:
+        import rfc as _rfc
+        hit = _rfc.read_table("CRMD_ORDERADM_H", ["OBJECT_ID"], where=f"GUID = '{ref.upper()}'", rowcount=1)
+        if not hit:
+            raise SolmanError(f"no document with GUID {ref}")
+        rid = hit[0]["OBJECT_ID"]
+    else:
+        rid = ref
+    rows = c.results("REQUIREMENTSet", {"$filter": f"RequirementId eq '{odata_literal(rid)}'"})
+    if not rows:
+        raise SolmanError(f"requirement {requirement_guid} not found")
+    current = rows[0]
+    g = current["RequirementGuid"]
+    if current.get("StatusId") in ("E0005", "E0006"):
+        raise SolmanError(f"requirement {rid} is {current.get('Status')} — the document is locked "
+                          "(CRM_ORDER/008 'No changes possible'); a MERGE would answer 204 and change nothing")
+    body = _full_entity(current)
+    body.update(changes)
+    key = f"REQUIREMENTSet(WpGuid='',RequirementGuid='{body['RequirementGuid'].replace('-', '')}')"
+    c.batch_merge(key, body)
+    after = c.results("REQUIREMENTSet", {"$filter": f"RequirementId eq '{current['RequirementId']}'"})[0]
+
+    def _eq(a, b):
+        if isinstance(a, dict) and isinstance(b, dict):
+            return all(str(b.get(k, "")) == str(v) for k, v in a.items() if k != "__metadata")
+        return str(a) == str(b)
+    applied = {k: _eq(v, after.get(k)) for k, v in changes.items()}
+    return {"id": current["RequirementId"], "guid": g, "applied": applied,
+            "all_applied": all(applied.values()),
+            "now": {k: after.get(k) for k in changes},
+            "solution_kept": bool(after.get("SolutionId")) == bool(current.get("SolutionId"))}

@@ -146,8 +146,11 @@ Readable and enumerable with the same tools; lifecycle through
    `CRMD_ORDERADM_H` resolves any id to its GUID. If you ever see 16-character GUIDs
    again, the kernel has dropped `ET_DATA` and every GUID join is suspect.
 4. **`attach_element`'s `verified: true` is a false positive.** Follow with
-   `list_requirement_elements`. **`update_requirement` blanks `SolutionId`** and hides
-   element links until they are re-attached — do text edits before attaching.
+   `list_requirement_elements`. `update_requirement` used to blank `SolutionId` (hiding
+   element links); it now sends the full entity in a changeset like the Fiori app, so any
+   header field — planned project, team, owner, classification — is writable and nothing
+   is lost. Completed/Canceled requirements are locked (`CRM_ORDER/008`); a MERGE there
+   returns 204 and changes nothing, which the tool now refuses up front.
 5. **`create_requirement` ignores `planned_project` without `planned_project_guid`** and
    files the requirement outside its release. `preflight` flags the unset target.
 6. **Text notes need the `ConfigId` filter to read and a `$batch` changeset to write.**

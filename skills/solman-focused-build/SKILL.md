@@ -45,7 +45,8 @@ They are not — re-run `attach_element` for every element with explicit `soluti
 too.** No error — the requirement is simply created with a blank planned project, outside
 the release, invisible to every project-scoped view and KPI report. There is **no OData fix
 afterwards**: `PlannedProject` is not updatable and a direct MERGE returns `500`. It has to
-be corrected in the Fiori Requirement app, which resets the status. Pass both, then read
+be corrected with `update_requirement_fields(g, PlannedProject=…, PlannedProjectGuid=…)` (the
+   Fiori edit does the same but resets the status). Pass both, then read
 `PlannedProject` back.
 
 **4. Work package project and release are create-only.** `BRWPSet` and `WORKPACKAGESet`

@@ -238,3 +238,39 @@ if FAILED:
     print(f"{len(FAILED)} FAILED: {', '.join(FAILED)}")
     sys.exit(1)
 print("module checks passed")
+
+
+def _requirement_update_checks():
+    print("requirements: full-entity update helper")
+    import requirements as rq
+    row = {"__metadata": {"x": 1}, "RequirementGuid": "ABC", "SolutionId": "S", "PlannedProject": "P",
+           "CreatedAt": "/Date(1)/", "ChangedBy": "me", "Icon": "x",
+           "Category": {"__metadata": {}, "CatId": "GXP NO"},
+           "ClassifAttributes": {"__metadata": {}, "Value": "Fit"},
+           "REQELEMENTSet": {"__deferred": {"uri": "u"}}, "PPFACTIONSET": {"__deferred": {"uri": "u"}}}
+    body = rq._full_entity(row)
+    check("metadata stripped", "__metadata" in body, False)
+    check("deferred navigations stripped", "REQELEMENTSet" in body or "PPFACTIONSET" in body, False)
+    check("server-owned fields stripped", any(k in body for k in ("CreatedAt", "ChangedBy", "Icon")), False)
+    check("SolutionId carried (the old trap)", body.get("SolutionId"), "S")
+    check("complex types kept without metadata", body["Category"], {"CatId": "GXP NO"})
+    check("planned project is updatable now", "PlannedProject" in rq._FULL_UPDATABLE
+          and "PlannedProjectGuid" in rq._FULL_UPDATABLE, True)
+    check("team, owner, classification updatable", all(k in rq._FULL_UPDATABLE for k in
+          ("RequirementsTeamBpNb", "OwnerBpNo", "ClassifAttributes", "BusinessExpertBpNo")), True)
+    raises("unknown field rejected",
+           lambda: rq.update_requirement_fields("00000000000000000000000000000000", Nope="x"), ValueError)
+    raises("planned project without guid rejected",
+           lambda: rq.update_requirement_fields("00000000000000000000000000000000", PlannedProject="P"), ValueError)
+    import inspect
+    check("update_requirement delegates to the full-entity path",
+          "update_requirement_fields" in inspect.getsource(rq.update_requirement), True)
+    check("locked statuses refused", "E0005" in inspect.getsource(rq.update_requirement_fields)
+          and "E0006" in inspect.getsource(rq.update_requirement_fields), True)
+
+
+_requirement_update_checks()
+if FAILED:
+    print(f"{len(FAILED)} FAILED: {', '.join(FAILED)}")
+    sys.exit(1)
+print("requirement update checks passed")

@@ -183,7 +183,10 @@ def update_requirement(
     priority_name: str = "",
     external_reference: str = "",
 ) -> str:
-    """Update editable fields on a requirement (MERGE). Only non-empty args are changed."""
+    """Update text/priority fields on a requirement. Only non-empty args are changed.
+    Now saves the way the Fiori app does (full entity in a $batch changeset), so nothing
+    is blanked; for planned project, team, owner, expert or classification use
+    update_requirement_fields."""
     fields = {
         "RequirementTitle": title or None,
         "Description": description or None,
@@ -1101,6 +1104,47 @@ def create_defect(test_package_id: str, test_case_id: str, short_text: str, long
     return _wrap(defects.create_defect, test_package_id, test_case_id, short_text, long_text,
                  priority, reporter_bp, processor_bp, support_team_bp, system_id, client,
                  installation, csn_component, category, "", "S1DM", "", 0, 0, external_reference)
+
+
+
+@mcp.tool()
+def update_requirement_fields(requirement: str, planned_project: str = "", planned_project_guid: str = "",
+                              team_name: str = "", team_bp: str = "", owner_name: str = "", owner_bp: str = "",
+                              business_expert_name: str = "", business_expert_bp: str = "",
+                              classification: str = "", title: str = "", description: str = "",
+                              remarks: str = "", priority: str = "", external_reference: str = "") -> str:
+    """Change ANY header field of a requirement — including the ones that used to be
+    "Fiori-only": planned project (+GUID), requirements team, owner, business expert,
+    classification (Fit / WRICEF). `requirement` is an id or GUID. Only non-empty
+    arguments are applied; pass planned_project and planned_project_guid together.
+
+    How: the Requirements Fiori app saves a MERGE of the whole entity inside a $batch
+    changeset; this does the same, so SolutionId and element links are never blanked.
+    Proven by round-tripping PlannedProject and Business Expert on a live requirement.
+    Completed/Canceled requirements are locked (CRM_ORDER/008) and are refused up front.
+    Verified by re-read; journalled; blocked by SOLMAN_READONLY."""
+    changes = {}
+    if planned_project or planned_project_guid:
+        changes["PlannedProject"] = planned_project
+        changes["PlannedProjectGuid"] = planned_project_guid
+    if team_name or team_bp:
+        changes["RequirementsTeamName"], changes["RequirementsTeamBpNb"] = team_name, team_bp
+    if owner_name or owner_bp:
+        changes["OwnerName"], changes["OwnerBpNo"] = owner_name, owner_bp
+    if business_expert_name or business_expert_bp:
+        changes["BusinessExpertName"], changes["BusinessExpertBpNo"] = business_expert_name, business_expert_bp
+    if classification:
+        c = classification.strip().lower()
+        changes["ClassifAttributes"] = ({"AttrName": "/SALM/WRICEF", "Key": "1", "Value": "WRICEF"}
+                                        if c in ("wricef", "ricefw", "w") else
+                                        {"AttrName": "/SALM/WRICEF", "Key": "0", "Value": "Fit"})
+    for k, v in (("RequirementTitle", title), ("Description", description), ("Remarks", remarks),
+                 ("PriorityName", priority), ("ZZFLD00000B", external_reference)):
+        if v:
+            changes[k] = v
+    if not changes:
+        return "ERROR: nothing to change — pass at least one field"
+    return _wrap(rq.update_requirement_fields, requirement, **changes)
 
 
 if __name__ == "__main__":

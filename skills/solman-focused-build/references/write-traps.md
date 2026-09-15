@@ -11,9 +11,10 @@ call returned a success status and changed nothing.
 | `attach_element` response | `"verified": true` whenever the requirement has **any** element (`... or len(attached) > 0`) | Always re-read with `list_requirement_elements` and match the `element_id` |
 | `attach_element` with a new `scope_id` on an existing link | Keeps the original scope, reports success | `detach_element` then `attach_element` |
 | `create_requirement(planned_project=...)` without `planned_project_guid` | Planned project comes out **blank**, no error | Always pass both; read `PlannedProject` back |
-| MERGE carrying `PlannedProject` / `PlannedProjectGuid` | `500` | Fiori Requirement app only |
-| Updatable fields | Only `RequirementTitle`, `Description`, `Remarks`, `SuggestedSolution`, `LongDescription`, `PriorityName`, the external-reference custom field, `Value`, `Effort` | Everything else is create-only or Fiori-only |
-| Team name / BP in a non-default solution | Come back blank; not exposed by `update_requirement` | Set in the Fiori Requirement app |
+| MERGE carrying `PlannedProject` / `PlannedProjectGuid` (partial body, direct) | `500` | Send the FULL entity inside a `$batch` changeset — `update_requirement_fields` / `update_requirement` — proven round-trip on a live requirement |
+| Updatable fields | Any header field: title, texts, priority, value/effort, planned project (+GUID), team, owner, business expert, category, classification, solution/branch/scope | The Fiori app saves a full-entity MERGE in a changeset; `update_requirement` now does the same, so nothing is blanked and nothing is Fiori-only |
+| Requirement in status Completed (E0005) or Canceled (E0006) | MERGE answers `204` and changes nothing; PUT surfaces `CRM_ORDER/008 "No changes possible in document/transaction"` | The document is locked; `update_requirement_fields` refuses up front instead of reporting a phantom success |
+| Team name / BP in a non-default solution | Come back blank after creation | `update_requirement_fields(g, RequirementsTeamName=…, RequirementsTeamBpNb=…)` |
 | Work package link before Approved | Silently no-ops | Approve first: `S1BR_SEND_FOR_APPROVAL` → `S1BR_CONFIRMED` |
 
 ## Work packages (`BRWPSet`, `WORKPACKAGESet`, `WORKSPACESET`)
