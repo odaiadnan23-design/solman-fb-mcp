@@ -176,6 +176,9 @@ def refresh_session(timeout: int = 90) -> dict:
     script = Path(__file__).with_name("refresh_session.py")
     before = _cookie_mtime()
     attempts = []
+    cleared = _clear_stale_profile_lock()
+    if cleared:
+        attempts.append("cleared stale profile lock: " + ", ".join(cleared))
     try:
         # Headless first (silent). Measured 16-Sep-2026: headless exited in 3s
         # with "gracefully close end" while a headed run against the same warm
@@ -203,6 +206,41 @@ def refresh_session(timeout: int = 90) -> dict:
         return {"refreshed": False, "attempts": attempts, "reason": f"{type(ex).__name__}: {ex}"}
     finally:
         _release_lock()
+
+
+def _profile_in_use() -> bool:
+    """True if any Edge/Chromium process is running with the MCP's user-data-dir."""
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "(Get-CimInstance Win32_Process -Filter \"Name='msedge.exe'\" | "
+             "Where-Object { $_.CommandLine -like '*" + str(config.EDGE_PROFILE).replace("\\", "*") + "*' }).Count"],
+            capture_output=True, text=True, timeout=20)
+        return int((out.stdout or "0").strip() or 0) > 0
+    except Exception:  # noqa: BLE001 - if we cannot tell, do not delete anything
+        return True
+
+
+def _clear_stale_profile_lock() -> list[str]:
+    """Remove Chromium's singleton lock files when no browser holds the profile.
+
+    Measured 16-Sep-2026: after an Edge instance died, refresh_session.py failed in
+    three seconds with "Failed to create a ProcessSingleton for your profile directory"
+    on every attempt, headless and headed, with NO msedge process alive — a stale
+    lockfile. Every refresh would have failed forever without this.
+    """
+    if os.name != "nt" or _profile_in_use():
+        return []
+    removed = []
+    for name in ("lockfile", "SingletonLock", "SingletonCookie", "SingletonSocket"):
+        p = Path(config.EDGE_PROFILE) / name
+        try:
+            if p.exists() or p.is_symlink():
+                p.unlink()
+                removed.append(name)
+        except OSError:
+            pass
+    return removed
 
 
 def _cookie_mtime() -> float:
@@ -270,11 +308,18 @@ def harden_cookie() -> dict:
             who = f"{domain}\\{user}" if domain and user else user
             if not who:
                 return {"changed": False, "reason": "cannot determine current user"}
-            for target in (config.STATE_DIR, p):
-                subprocess.run(["icacls", str(target), "/inheritance:r",
-                                "/grant:r", f"{who}:(F)"],
-                               capture_output=True, text=True, timeout=20)
-            return {"changed": True, "granted_to": who, "acl": _windows_acl_summary(p)}
+            # The directory grant MUST carry (OI)(CI) so children — the Edge profile
+            # above all — inherit it. The first version granted the bare directory
+            # only and removed inheritance: every child lost its ACEs, Edge could no
+            # longer create its profile lock, and every session refresh failed with
+            # "ProcessSingleton" for hours. Measured 16-Sep-2026.
+            subprocess.run(["icacls", str(config.STATE_DIR), "/inheritance:r",
+                            "/grant:r", f"{who}:(OI)(CI)F", "/T", "/Q"],
+                           capture_output=True, text=True, timeout=60)
+            subprocess.run(["icacls", str(p), "/inheritance:r", "/grant:r", f"{who}:(F)"],
+                           capture_output=True, text=True, timeout=20)
+            return {"changed": True, "granted_to": who, "acl": _windows_acl_summary(p),
+                    "profile_accessible": os.access(str(config.EDGE_PROFILE), os.R_OK | os.W_OK)}
         os.chmod(p, 0o600)
         os.chmod(config.STATE_DIR, 0o700)
         return {"changed": True, "mode": "0600"}

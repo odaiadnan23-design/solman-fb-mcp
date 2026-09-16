@@ -128,7 +128,9 @@ def _call_once(fm: str, inner: str) -> str:
         # would be a wasted browser launch. Measured 16-Sep: a CRMD_PARTNER read
         # came back as an HTML error page while the session was perfectly valid.
         low = r.text[:4000].lower()
-        if any(k in low for k in ("logon", "log on", "saml", "login", "sign in", "authentication")):
+        # "Your browser is not configured for using SPNego" is the ICF's own login bounce
+        # when the session cookie has lapsed — a login page without the word login in it.
+        if any(k in low for k in ("logon", "log on", "saml", "login", "sign in", "authentication", "spnego")):
             raise SessionExpired("SolMan session expired (login page from /sap/bc/soap/rfc). "
                                  "Run: python refresh_session.py")
         title = re.search(r"<title>(.*?)</title>", r.text, re.S | re.I)
